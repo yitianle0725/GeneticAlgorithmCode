@@ -1,0 +1,40 @@
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── 虚拟环境 ──
+venv/
+.venv/
+env/
+
+# ── 实验结果 (太大，不上传) ──
+output/
+
+# ── 数据集 (太大，不上传) ──
+data/
+
+# ── 编译产物 ──
+code.exe
+*.exe
+*.o
+*.obj
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+
+# ── Claude Code ──
+.claude/
+
+# ── Jupyter ──
+.ipynb_checkpoints/
