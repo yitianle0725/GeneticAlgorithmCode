@@ -17,21 +17,44 @@ fi
 #  实验配置（改这里！）
 # ============================================================
 
-# 算法: NSGA2 / NSGA3 / MOEAD
-ALGO="MOEAD"
+# 算法: NSGA2 / NSGA3 / MOEAD / IEMOEC
+ALGO="IEMOEC"
 
-# 问题类型: DTLZ / ZDT
+# 问题类型: DTLZ / ZDT（IEMOEC 仅支持 DTLZ）
 MODE="DTLZ"
 
 # 目标维度列表（空格分隔）
+# ┌────────┬──────────┬──────────────┬──────────────────────┐
+# │   M    │ 参考点数 │ 岛内总评估数 │ 单 DTLZ 预计耗时     │
+# ├────────┼──────────┼──────────────┼──────────────────────┤
+# │   3    │    91    │   ~60,000    │  ~2-3 分钟           │
+# │   5    │   210    │  ~100,000    │  ~5-8 分钟           │
+# │   8    │   120    │  ~160,000    │  ~10-15 分钟          │
+# │  10    │   220    │  ~220,000    │  ~20-30 分钟          │
+# │  15    │   120    │  ~310,000    │  ~40-60 分钟          │
+# └────────┴──────────┴──────────────┴──────────────────────┘
+# 5 个 M × 5 个 DTLZ = 25 组，串行总耗时约 6-12 小时
+# 建议分两批跑: M_LIST="3 5" 先跑(约30分钟), M_LIST="8 10 15" 后跑(约5-10小时)
 M_LIST="3 5 8 10 15"
 
-# 问题编号列表（空格分隔，留空 = 全跑）
-# 例如: PROBLEM_IDS="1 2 3 4"  只跑 DTLZ1~4（论文标准对比集）
-#       PROBLEM_IDS="2"        只跑 DTLZ2
-#       PROBLEM_IDS="10"       只跑 C-DTLZ2
-#       PROBLEM_IDS=""         全跑 DTLZ1~9 / ZDT1~6
-PROBLEM_IDS="10"
+# 问题编号列表（空格分隔，留空 = 全跑 DTLZ1~9）
+#   PROBLEM_IDS="2"          只跑 DTLZ2（快速验证，1 个问题）
+#   PROBLEM_IDS="1 2 3 4"    论文标准对比集 DTLZ1~4
+#   PROBLEM_IDS="1 2 3 4 10" 论文标准 + C-DTLZ2 凸PF
+#   PROBLEM_IDS=""           全跑 DTLZ1~9
+PROBLEM_IDS="1 2 3 4 10"
+
+# ──────────── IE_MOEC 参数调优（可选）────────────
+# 如需覆盖 config.py 中的默认值，修改 src/config.py 中的以下参数:
+#   N_ORIGIN=None           起源种群大小（None=自动 POPSIZE）
+#   N_ISLANDS=None          孤岛数量（None=自动 2×NOBJ，含 M 极端+M 折中）
+#   ISLAND_POPSIZE=20       孤岛子种群大小
+#   ISLAND_GENS_EARLY=30    岛内演化代数（聚合阶段）
+#   ISLAND_GENS_LATE=70     岛内演化代数（Pareto 阶段）
+#   MAX_OUTER_GENS=20       外循环最大代数
+#   SWITCH_RATIO=0.4        聚合→Pareto 切换比例
+#   ELITES_PER_ISLAND=3     每岛精英输出数
+#   PF_EXPAND_RATIO=2.0     PF 扩展倍数
 
 # ──────────── V-C 尺度缩放实验（论文 Section V-C）────────────
 # SCALE_LIST: 空格分隔的缩放方案列表，留空 = 不启用

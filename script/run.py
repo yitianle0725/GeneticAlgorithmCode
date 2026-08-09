@@ -29,6 +29,7 @@ import os
 import argparse
 import random
 import datetime
+import time
 import numpy as np
 
 # 确保 src 目录在 path 中
@@ -39,6 +40,7 @@ sys.path.insert(0, SRC_DIR)
 
 from config import GAConfig
 from moec_algorithm import MultiObjMOECAbilene
+from iemoec_algorithm import IEMOEC
 from batch_summary import generate_batch_summary
 
 
@@ -57,6 +59,7 @@ ALGO_INFO = {
     "NSGA3": "参考向量小生境 (推荐 >=3 目标)",
     "NSGA2": "拥挤度距离 (推荐 2 目标)",
     "MOEAD": "Tchebycheff 分解 + 邻域交配 (论文对比基线)",
+    "IEMOEC": "独立进化多目标极值组合 — 双层孤岛分治 (实验性)",
 }
 
 
@@ -68,11 +71,20 @@ def run_single(cfg: GAConfig, problem_type: str, problem_id: int,
     np.random.seed(123)
 
     if problem_type == "DTLZ":
-        ga = MultiObjMOECAbilene(
-            dt_id=problem_id, dtlz_M=cfg.NOBJ, algo_type=algo,
-            root_output_dir=batch_root, scale_scheme=scale_scheme
-        )
+        if algo == "IEMOEC":
+            ga = IEMOEC(
+                dt_id=problem_id, dtlz_M=cfg.NOBJ,
+                root_output_dir=batch_root, scale_scheme=scale_scheme
+            )
+        else:
+            ga = MultiObjMOECAbilene(
+                dt_id=problem_id, dtlz_M=cfg.NOBJ, algo_type=algo,
+                root_output_dir=batch_root, scale_scheme=scale_scheme
+            )
     elif problem_type == "ZDT":
+        if algo == "IEMOEC":
+            print("⚠ IEMOEC 当前仅支持 DTLZ 问题，跳过 ZDT")
+            return
         ga = MultiObjMOECAbilene(
             zdt_id=problem_id, algo_type=algo,
             root_output_dir=batch_root
@@ -80,7 +92,15 @@ def run_single(cfg: GAConfig, problem_type: str, problem_id: int,
     else:
         raise ValueError(f"未知问题类型: {problem_type}")
 
+    label = f"{problem_type}{problem_id}"
+    t_start = time.time()
     ga.run()
+    elapsed = time.time() - t_start
+    if elapsed >= 60:
+        elapsed_str = f"{int(elapsed // 60)}m{elapsed % 60:.1f}s"
+    else:
+        elapsed_str = f"{elapsed:.1f}s"
+    print(f"  [计时] {label}_M{cfg.NOBJ}_{algo}  耗时: {elapsed_str}")
 
 
 def run_batch(problem_type: str, algo: str, nobj: int,
@@ -172,7 +192,7 @@ def interactive_mode():
         print(f"  {i}. {key:<6} — {ALGO_INFO[key]}")
     while True:
         try:
-            choice = input("\n请选择 (1-3, 默认 1=NSGA3): ").strip()
+            choice = input("\n请选择 (1-4, 默认 1=NSGA3): ").strip()
             if choice == "":
                 choice = "1"
             idx = int(choice) - 1
@@ -262,7 +282,7 @@ def main():
                         help="交互模式（逐步引导选择参数）")
     parser.add_argument("--mode", type=str, choices=["DTLZ", "ZDT"],
                         default="DTLZ", help="问题类型 (默认: DTLZ)")
-    parser.add_argument("--algo", type=str, choices=["NSGA2", "NSGA3", "MOEAD"],
+    parser.add_argument("--algo", type=str, choices=["NSGA2", "NSGA3", "MOEAD", "IEMOEC"],
                         default="NSGA3", help="算法 (默认: NSGA3)")
     parser.add_argument("--M", type=int, choices=[3, 5, 8, 10, 15],
                         help="目标维度 (仅 DTLZ 需要，默认: 8)")

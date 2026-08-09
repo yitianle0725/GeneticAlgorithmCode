@@ -78,6 +78,30 @@ class GAConfig:
         # 最大替换数: 每个子代最多替换 nr 个邻居（防止早熟）
         self.MOEAD_NR = 2
 
+        # ──────────── IE_MOEC 专用参数 ────────────
+        # 起源种群大小（阶段①），None = 自动设为 POPSIZE（与 NSGA3 同规模）
+        self.N_ORIGIN = None
+        # 孤岛数量，None = 自动设为 2×NOBJ（M 个极端岛 + M 个折中岛）
+        self.N_ISLANDS = None
+        # 每个孤岛的子种群大小（阶段②扩增后）
+        self.ISLAND_POPSIZE = 20
+        # 岛内独立演化代数：聚合阶段（前期快速搜索）
+        self.ISLAND_GENS_EARLY = 30
+        # 岛内独立演化代数：Pareto 阶段（后期精细搜索）
+        self.ISLAND_GENS_LATE = 70
+        # 外循环最大代数
+        self.MAX_OUTER_GENS = 20
+        # 两阶段切换比例（0.4 = 前 40% 外循环用加权聚合，后 60% 用 Pareto）
+        self.SWITCH_RATIO = 0.4
+        # 加权聚合阶段，非主目标维度的权重（ε 小值）
+        self.AGG_EPSILON = 1e-3
+        # 极值重组交叉率
+        self.RECOMBINE_PXOVER = 0.9
+        # 每岛输出精英数（用于重组阶段）
+        self.ELITES_PER_ISLAND = 3
+        # PF 扩展倍数（收敛后扩展至 POPSIZE 个解）
+        self.PF_EXPAND_RATIO = 2.0
+
     def _compute_scale_factors(self):
         """返回 M 维缩放因子向量（V-C 尺度缩放实验）
 

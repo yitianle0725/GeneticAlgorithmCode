@@ -151,5 +151,5 @@ class GAVisualizer:
         if save_dir is not None:
             para_path = os.path.join(save_dir, "pareto_parallel.png")
             plt.savefig(para_path, dpi=300, bbox_inches="tight")
-            print(f"📊 平行坐标图已保存: {para_path}")
+            print(f"[OK] 平行坐标图已保存: {para_path}")
         # plt.show()
