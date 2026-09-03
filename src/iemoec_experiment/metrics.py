@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import numpy as np
+from pymoo.indicators.gd import GD
+from pymoo.indicators.hv import HV
+from pymoo.indicators.igd_plus import IGDPlus
+from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+from pymoo.util.ref_dirs import get_reference_directions
+
+
+_REFERENCE_FRONT_CACHE: dict[tuple, np.ndarray] = {}
+
+
+def reference_front(problem, n_points: int = 1000) -> np.ndarray:
+    cache_key = (
+        problem.__class__.__module__, problem.__class__.__name__,
+        problem.n_var, problem.n_obj, n_points,
+    )
+    if cache_key in _REFERENCE_FRONT_CACHE:
+        return _REFERENCE_FRONT_CACHE[cache_key]
+    if problem.n_obj <= 5:
+        ref_dirs = get_reference_directions(
+            "energy", problem.n_obj, n_points=n_points, seed=1
+        )
+    else:
+        # 高维 energy 优化本身很昂贵；固定 Dirichlet 方向可复现且对所有算法共享。
+        ref_dirs = np.random.default_rng(1).dirichlet(
+            np.ones(problem.n_obj), size=n_points
+        )
+    pf = problem.pareto_front(ref_dirs=ref_dirs)
+    if pf is None or len(pf) == 0:
+        raise ValueError(f"{problem.__class__.__name__} 无法生成参考 Pareto front")
+    result = np.asarray(pf, dtype=float)
+    _REFERENCE_FRONT_CACHE[cache_key] = result
+    return result
+
+
+def shared_bounds(problem, ref_pf: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """边界仅取自问题定义/真实 PF，绝不从单个算法的解集估计。"""
+    ideal = problem.ideal_point()
+    nadir = problem.nadir_point()
+    if ideal is None:
+        ideal = np.min(ref_pf, axis=0)
+    if nadir is None:
+        nadir = np.max(ref_pf, axis=0)
+    ideal = np.asarray(ideal, dtype=float)
+    nadir = np.asarray(nadir, dtype=float)
+    span = nadir - ideal
+    if np.any(~np.isfinite(span)) or np.any(span <= 1e-12):
+        ideal, nadir = np.min(ref_pf, axis=0), np.max(ref_pf, axis=0)
+    return ideal, nadir
+
+
+def normalize(F: np.ndarray, ideal: np.ndarray, nadir: np.ndarray) -> np.ndarray:
+    return (np.asarray(F, dtype=float) - ideal) / np.maximum(nadir - ideal, 1e-12)
+
+
+def nondominated(F: np.ndarray) -> np.ndarray:
+    if len(F) == 0:
+        return np.empty((0, F.shape[1] if F.ndim == 2 else 0))
+    indices = NonDominatedSorting().do(F, only_non_dominated_front=True)
+    return np.asarray(F)[indices]
+
+
+def spacing(F: np.ndarray) -> float:
+    F = np.asarray(F, dtype=float)
+    if len(F) < 2:
+        return 0.0
+    distances = np.abs(F[:, None, :] - F[None, :, :]).sum(axis=2)
+    np.fill_diagonal(distances, np.inf)
+    nearest = distances.min(axis=1)
+    return float(np.std(nearest, ddof=1)) if len(nearest) > 1 else 0.0
+
+
+class MetricSuite:
+    def __init__(self, problem, n_reference_points: int = 1000, hv_samples: int = 20000):
+        self.ref_pf = reference_front(problem, n_reference_points)
+        self.ideal, self.nadir = shared_bounds(problem, self.ref_pf)
+        self.igd_plus = IGDPlus(self.ref_pf)
+        self.gd = GD(self.ref_pf)
+        self.hv_method = "exact" if problem.n_obj <= 5 else "monte_carlo"
+        self.hv = HV(ref_point=np.full(problem.n_obj, 1.1)) if problem.n_obj <= 5 else None
+        self.hv_ref = 1.1
+        self.hv_samples = np.random.default_rng(20260903).uniform(
+            0.0, self.hv_ref, size=(hv_samples, problem.n_obj)
+        ) if problem.n_obj > 5 else None
+
+    def _calculate_hv(self, normalized_nd: np.ndarray) -> float:
+        points = np.maximum(normalized_nd, 0.0)
+        if self.hv is not None:
+            return float(self.hv(points))
+        dominated_count = 0
+        assert self.hv_samples is not None
+        for start in range(0, len(self.hv_samples), 1000):
+            samples = self.hv_samples[start:start + 1000]
+            dominated = np.any(
+                np.all(points[:, None, :] <= samples[None, :, :], axis=2), axis=0
+            )
+            dominated_count += int(np.sum(dominated))
+        box_volume = self.hv_ref ** points.shape[1]
+        return float(box_volume * dominated_count / len(self.hv_samples))
+
+    def calculate(self, F: np.ndarray, include_hv: bool = True) -> dict[str, float | int]:
+        F = np.asarray(F, dtype=float)
+        nd = nondominated(F)
+        normalized_nd = normalize(nd, self.ideal, self.nadir)
+        result: dict[str, float | int] = {
+            "igd_plus": float(self.igd_plus(nd)),
+            "gd": float(self.gd(nd)),
+            "spacing": spacing(normalized_nd),
+            "onvg": int(len(nd)),
+            "nd_ratio": float(len(nd) / max(1, len(F))),
+        }
+        if include_hv:
+            result["hv"] = self._calculate_hv(normalized_nd)
+        return result

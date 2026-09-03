@@ -1,326 +1,193 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-一键实验启动脚本 — NSGA-II / NSGA-III / MOEA/D 多目标优化实验
+"""IEMOEC 统一实验入口（pymoo 0.6.2）。"""
 
-用法:
-  # 交互模式（推荐新手）
-  python script/run.py
+from __future__ import annotations
 
-  # 命令行模式
-  python script/run.py --mode DTLZ --algo NSGA3 --M 8
-  python script/run.py --mode DTLZ --algo MOEAD --M 5
-  python script/run.py --mode DTLZ --algo NSGA3 --M 3 --problem 2
-  python script/run.py --mode ZDT  --algo NSGA2 --problem 4
-  python script/run.py --mode ZDT  --algo MOEAD
-
-支持的问题类型:
-  DTLZ — DTLZ1~10，M 目标 (3/5/8/10/15)
-  ZDT  — ZDT1~6，2 目标
-
-支持的算法:
-  NSGA2 — 非支配排序遗传算法 II (拥挤度距离)
-  NSGA3 — 非支配排序遗传算法 III (参考向量小生境)
-  MOEAD — 基于分解的多目标进化算法 (Tchebycheff)
-"""
-
-import sys
-import os
 import argparse
-import random
-import datetime
-import time
-import numpy as np
+import json
+import multiprocessing
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
-# 确保 src 目录在 path 中
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-SRC_DIR = os.path.join(PROJECT_ROOT, "src")
-sys.path.insert(0, SRC_DIR)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_DIR))
 
-from config import GAConfig
-from moec_algorithm import MultiObjMOECAbilene
-from iemoec_algorithm import IEMOEC
-from batch_summary import generate_batch_summary
+from iemoec_experiment.config import (  # noqa: E402
+    ExperimentCase,
+    IEMOECConfig,
+    SUPPORTED_ALGORITHMS,
+)
+from iemoec_experiment.factory import reference_directions  # noqa: E402
+from iemoec_experiment.runner import run_case  # noqa: E402
 
 
-# ──────────────────────────── 外观 ────────────────────────────
-HEADER = """
-╔══════════════════════════════════════════════════════╗
-║   NSGA-II / NSGA-III / MOEA/D  多目标优化实验平台    ║
-╚══════════════════════════════════════════════════════╝"""
-
-MODE_INFO = {
-    "DTLZ": {"desc": "DTLZ 标准测试集 (1~10)", "nobj": "3/5/8/10/15"},
-    "ZDT":  {"desc": "ZDT 双目标测试集 (1~6)", "nobj": "2 (固定)"},
+PRESETS = {
+    "smoke": {
+        "problems": ["dtlz2"],
+        "objectives": [3],
+        "seeds": [1],
+        "evals_per_pop": 20,
+    },
+    "pilot": {
+        "problems": ["dtlz1", "dtlz2", "dtlz3", "dtlz4"],
+        "objectives": [3, 5, 10],
+        "seeds": list(range(1, 6)),
+        "evals_per_pop": 200,
+    },
+    "formal": {
+        "problems": [
+            "dtlz1", "dtlz2", "dtlz3", "dtlz4",
+            "wfg1", "wfg2", "wfg4", "wfg9",
+        ],
+        "objectives": [3, 5, 8, 10, 15],
+        "seeds": list(range(1, 31)),
+        "evals_per_pop": 400,
+    },
 }
 
-ALGO_INFO = {
-    "NSGA3": "参考向量小生境 (推荐 >=3 目标)",
-    "NSGA2": "拥挤度距离 (推荐 2 目标)",
-    "MOEAD": "Tchebycheff 分解 + 邻域交配 (论文对比基线)",
-    "IEMOEC": "独立进化多目标极值组合 — 双层孤岛分治 (实验性)",
-}
 
-
-# ──────────────────────────── 核心执行 ────────────────────────────
-def run_single(cfg: GAConfig, problem_type: str, problem_id: int,
-               algo: str, batch_root: str, scale_scheme: str = None) -> None:
-    """执行单次实验"""
-    random.seed(123)
-    np.random.seed(123)
-
-    if problem_type == "DTLZ":
-        if algo == "IEMOEC":
-            ga = IEMOEC(
-                dt_id=problem_id, dtlz_M=cfg.NOBJ,
-                root_output_dir=batch_root, scale_scheme=scale_scheme
-            )
+def parse_int_set(text: str) -> list[int]:
+    result = set()
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start, end = (int(value) for value in token.split("-", 1))
+            if end < start:
+                raise argparse.ArgumentTypeError(f"非法范围: {token}")
+            result.update(range(start, end + 1))
         else:
-            ga = MultiObjMOECAbilene(
-                dt_id=problem_id, dtlz_M=cfg.NOBJ, algo_type=algo,
-                root_output_dir=batch_root, scale_scheme=scale_scheme
-            )
-    elif problem_type == "ZDT":
-        if algo == "IEMOEC":
-            print("⚠ IEMOEC 当前仅支持 DTLZ 问题，跳过 ZDT")
-            return
-        ga = MultiObjMOECAbilene(
-            zdt_id=problem_id, algo_type=algo,
-            root_output_dir=batch_root
-        )
-    else:
-        raise ValueError(f"未知问题类型: {problem_type}")
-
-    label = f"{problem_type}{problem_id}"
-    t_start = time.time()
-    ga.run()
-    elapsed = time.time() - t_start
-    if elapsed >= 60:
-        elapsed_str = f"{int(elapsed // 60)}m{elapsed % 60:.1f}s"
-    else:
-        elapsed_str = f"{elapsed:.1f}s"
-    print(f"  [计时] {label}_M{cfg.NOBJ}_{algo}  耗时: {elapsed_str}")
+            result.add(int(token))
+    if not result:
+        raise argparse.ArgumentTypeError("集合不能为空")
+    return sorted(result)
 
 
-def run_batch(problem_type: str, algo: str, nobj: int,
-              single_problem: int = None,
-              shared_batch_root: str = None,
-              scale_scheme: str = None) -> None:
-    """批量实验入口
-
-    目录结构:
-      output/{algo}/batch_{ts}/
-        {problem_type}_M{nobj}/
-          {problem_type}{pid}_M{nobj}_{algo}[_Scale{x}]/
-    """
-    # 顶层批次目录（可由 run.sh 统一传入，保证同一批实验在同一时间戳下）
-    if shared_batch_root:
-        batch_root = shared_batch_root
-    else:
-        batch_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        batch_dir_name = f"batch_{batch_time}"
-        batch_root = os.path.join(PROJECT_ROOT, "output", algo, batch_dir_name)
-
-    # M 级目录: output/{algo}/batch_ts/DTLZ_M5/
-    # batch_root 已含 algo，此处不再重复添加
-    m_root = os.path.join(batch_root, f"{problem_type}_M{nobj}")
-    os.makedirs(m_root, exist_ok=True)
-
-    cfg = GAConfig(nobj=nobj, scale_scheme=scale_scheme)
-
-    scale_tag = f" Scale={scale_scheme}" if scale_scheme and scale_scheme != "A" else ""
-    print(f"\n{'='*60}")
-    print(f"  实验配置: {problem_type} | {algo} | M={nobj}{scale_tag}")
-    print(f"  种群={cfg.POPSIZE} | 代数={cfg.MAXGENS} | "
-          f"参考点划分={cfg.REF_DIV}")
-    print(f"  输出目录: {m_root}")
-    print(f"{'='*60}\n")
-
-    if problem_type == "DTLZ":
-        problem_ids = [single_problem] if single_problem else list(range(1, 11))
-    elif problem_type == "ZDT":
-        problem_ids = [single_problem] if single_problem else list(range(1, 7))
-    else:
-        raise ValueError(f"未知问题类型: {problem_type}")
-
-    for pid in problem_ids:
-        label = f"{problem_type}{pid}"
-        print(f"{'─'*50}")
-        print(f"  >>> {label}_{algo}  开始")
-        print(f"{'─'*50}")
-        run_single(cfg, problem_type, pid, algo, batch_root=m_root, scale_scheme=scale_scheme)
-        print(f"  <<< {label}_{algo}  完成\n")
-
-    # 汇总
-    print(f"\n{'='*60}")
-    print("  全部实验完成，生成汇总…")
-    if problem_type == "DTLZ":
-        generate_batch_summary(batch_root, nobj, algo, scale_scheme=scale_scheme)
-    print(f"  结果保存在: {batch_root}")
-    print(f"{'='*60}\n")
-
-
-# ──────────────────────────── 交互模式 ────────────────────────────
-def interactive_mode():
-    """逐步引导式交互"""
-    print(HEADER)
-
-    # Step 1: 问题类型
-    print("\n【问题类型】")
-    mode_keys = list(MODE_INFO.keys())
-    for i, key in enumerate(mode_keys, 1):
-        info = MODE_INFO[key]
-        print(f"  {i}. {key:<6} — {info['desc']}  (目标维度: {info['nobj']})")
-    while True:
-        try:
-            choice = input("\n请选择 (1-2, 默认 1=DTLZ): ").strip()
-            if choice == "":
-                choice = "1"
-            idx = int(choice) - 1
-            if 0 <= idx < len(mode_keys):
-                problem_type = mode_keys[idx]
-                break
-            print("  ⚠ 输入无效，请重新选择")
-        except ValueError:
-            print("  ⚠ 请输入数字")
-
-    # Step 2: 算法
-    print("\n【算法选择】")
-    algo_keys = list(ALGO_INFO.keys())
-    for i, key in enumerate(algo_keys, 1):
-        print(f"  {i}. {key:<6} — {ALGO_INFO[key]}")
-    while True:
-        try:
-            choice = input("\n请选择 (1-4, 默认 1=NSGA3): ").strip()
-            if choice == "":
-                choice = "1"
-            idx = int(choice) - 1
-            if 0 <= idx < len(algo_keys):
-                algo = algo_keys[idx]
-                break
-            print("  ⚠ 输入无效，请重新选择")
-        except ValueError:
-            print("  ⚠ 请输入数字")
-
-    # Step 3: 目标维度 M (仅 DTLZ)
-    nobj = None
-    if problem_type == "DTLZ":
-        print("\n【目标维度 M】")
-        print("  1. M=3    2. M=5    3. M=8    4. M=10    5. M=15")
-        while True:
-            choice = input("请选择 (1-5, 默认 3=M=8): ").strip()
-            if choice == "":
-                nobj = 8
-                break
-            try:
-                m_map = {1: 3, 2: 5, 3: 8, 4: 10, 5: 15}
-                nobj = m_map.get(int(choice))
-                if nobj:
-                    break
-                print("  ⚠ 输入无效")
-            except ValueError:
-                print("  ⚠ 请输入数字")
-    elif problem_type == "ZDT":
-        nobj = 2
-
-    # Step 4: 单问题 or 批量
-    single_problem = None
-    if problem_type == "DTLZ":
-        print("\n【运行范围】")
-        print("  1. 批量运行全部 DTLZ1~10")
-        print("  2. DTLZ1  3. DTLZ2  ...  10. DTLZ9  11. C-DTLZ2")
-        choice = input("请选择 (默认 1=全跑): ").strip()
-        if choice and choice != "1":
-            try:
-                pid = int(choice) - 1
-                if 1 <= pid <= 10:
-                    single_problem = pid
-            except ValueError:
-                pass
-    elif problem_type == "ZDT":
-        print("\n【运行范围】")
-        print("  1. 批量运行全部 ZDT1~6")
-        for i in range(1, 7):
-            print(f"  {i+1}. 只跑 ZDT{i}")
-        choice = input("请选择 (默认 1=全跑): ").strip()
-        if choice and choice != "1":
-            try:
-                pid = int(choice) - 1
-                if 1 <= pid <= 6:
-                    single_problem = pid
-            except ValueError:
-                pass
-
-    # Step 5: 确认
-    label = f"{problem_type}{single_problem}" if single_problem else problem_type
-    print(f"\n{'─'*50}")
-    print(f"  确认: {label} | {algo} | M={nobj}")
-    confirm = input("  开始执行? (Y/n): ").strip().lower()
-    if confirm and confirm != "y":
-        print("  已取消")
-        return
-
-    run_batch(problem_type, algo, nobj, single_problem)
-
-
-# ──────────────────────────── CLI 入口 ────────────────────────────
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="NSGA-II/III/MOEAD 多目标优化实验一键启动脚本",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  python script/run.py --mode DTLZ --algo NSGA3 --M 8
-  python script/run.py --mode DTLZ --algo MOEAD --M 5
-  python script/run.py --mode DTLZ --algo NSGA3 --M 3 --problem 2
-  python script/run.py --mode ZDT  --algo NSGA2 --problem 4
-  python script/run.py -i          # 交互模式
-        """
+        description="基于 pymoo 的 NSGA-II/III、MOEA/D 与 IEMOEC 公平对比实验",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-i", "--interactive", action="store_true",
-                        help="交互模式（逐步引导选择参数）")
-    parser.add_argument("--mode", type=str, choices=["DTLZ", "ZDT"],
-                        default="DTLZ", help="问题类型 (默认: DTLZ)")
-    parser.add_argument("--algo", type=str, choices=["NSGA2", "NSGA3", "MOEAD", "IEMOEC"],
-                        default="NSGA3", help="算法 (默认: NSGA3)")
-    parser.add_argument("--M", type=int, choices=[3, 5, 8, 10, 15],
-                        help="目标维度 (仅 DTLZ 需要，默认: 8)")
-    parser.add_argument("--problem", type=int,
-                        help="问题编号 (仅跑单个问题，不传则批量全跑)")
-    parser.add_argument("--batch-root", type=str, default=None,
-                        help="父级批次目录（run.sh 统一传入，保证同时间戳）")
-    parser.add_argument("--scale", type=str, choices=["A", "B", "C", "D"], default=None,
-                        help="V-C 尺度缩放方案 (A=无缩放/对照, B=f1=1其余10, C=奇偶交替, D=递增幂)")
-    parser.add_argument("--seed", type=int, default=123,
-                        help="随机种子 (默认: 123)")
+    parser.add_argument("--preset", choices=["smoke", "pilot", "formal", "custom"], default="smoke")
+    parser.add_argument("--algorithms", nargs="+", choices=SUPPORTED_ALGORITHMS, default=list(SUPPORTED_ALGORITHMS))
+    parser.add_argument("--problems", nargs="+", help="例如 dtlz2 wfg1")
+    parser.add_argument("--objectives", type=parse_int_set, help="例如 3,5,8,10,15")
+    parser.add_argument("--seeds", type=parse_int_set, help="例如 1-5 或 1,3,7")
+    budget = parser.add_mutually_exclusive_group()
+    budget.add_argument("--max-fes", type=int, help="显式共同 FE；必须是各 M 共同种群大小的倍数")
+    budget.add_argument("--evals-per-pop", type=int, help="推荐：预算=参考方向数×该倍数")
+    parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    parser.add_argument("--run-name", help="results 下的实验名；固定名称便于断点续跑")
+    parser.add_argument("--output-root", default=str(PROJECT_ROOT / "results"))
+    parser.add_argument("--history-points", type=int, default=20)
+    parser.add_argument("--history-hv", action="store_true", help="在检查点计算 HV（高维实验不建议）")
+    parser.add_argument("--reference-points", type=int, default=1000)
+    parser.add_argument("--high-dim-hv-samples", type=int, default=20000)
+    parser.add_argument("--force", action="store_true", help="覆盖相同目录中的已有结果")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--iemoec-survival", choices=["nsga3", "rank"], default="nsga3")
+    parser.add_argument("--iemoec-crowding", action="store_true")
+    parser.add_argument("--no-recombination", action="store_true")
+    parser.add_argument("--island-population", type=int, default=20)
+    parser.add_argument("--partners-per-elite", type=int, default=2)
+    return parser
 
-    args = parser.parse_args()
 
-    # 无参数 / -i → 交互模式
-    if args.interactive or len(sys.argv) == 1:
-        interactive_mode()
-        return
+def resolve_cases(args) -> list[ExperimentCase]:
+    preset = PRESETS.get(args.preset, {})
+    problems = args.problems or preset.get("problems")
+    objectives = args.objectives or preset.get("objectives")
+    seeds = args.seeds or preset.get("seeds")
+    evals_per_pop = args.evals_per_pop or preset.get("evals_per_pop", 200)
+    if not problems or not objectives or not seeds:
+        raise ValueError("custom 模式必须提供 --problems、--objectives 和 --seeds")
+    run_name = args.run_name or args.preset
+    output_root = str(Path(args.output_root) / run_name)
+    iemoec = IEMOECConfig(
+        island_population=args.island_population,
+        partners_per_elite=args.partners_per_elite,
+        outer_survival=args.iemoec_survival,
+        use_crowding=args.iemoec_crowding,
+        enable_recombination=not args.no_recombination,
+    )
+    cases = []
+    for problem in problems:
+        for n_obj in objectives:
+            probe = ExperimentCase("NSGA2", problem, n_obj, seeds[0], 1)
+            pop_size = len(reference_directions(probe))
+            max_fes = args.max_fes or (pop_size * evals_per_pop)
+            if max_fes % pop_size:
+                raise ValueError(
+                    f"M={n_obj} 的共同种群大小是 {pop_size}，max_fes={max_fes} 不是其倍数"
+                )
+            for algorithm in args.algorithms:
+                for seed in seeds:
+                    cases.append(ExperimentCase(
+                        algorithm=algorithm,
+                        problem=problem,
+                        n_obj=n_obj,
+                        seed=seed,
+                        max_fes=max_fes,
+                        output_root=output_root,
+                        history_points=args.history_points,
+                        history_hv=args.history_hv,
+                        reference_points=args.reference_points,
+                        high_dim_hv_samples=args.high_dim_hv_samples,
+                        iemoec=iemoec,
+                    ))
+    return cases
 
-    # CLI 模式参数校验
-    if args.mode == "DTLZ":
-        nobj = args.M if args.M else 8
-    else:  # ZDT
-        nobj = 2
 
-    single_problem = None
-    if args.problem is not None:
-        if args.mode == "DTLZ" and not (1 <= args.problem <= 10):
-            print(f"⚠ DTLZ 问题编号范围: 1~10，收到 {args.problem}")
-            sys.exit(1)
-        if args.mode == "ZDT" and not (1 <= args.problem <= 6):
-            print(f"⚠ ZDT 问题编号范围: 1~6，收到 {args.problem}")
-            sys.exit(1)
-        single_problem = args.problem
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        cases = resolve_cases(args)
+    except ValueError as exc:
+        print(f"配置错误: {exc}", file=sys.stderr)
+        return 2
+    print(f"实验任务: {len(cases)} | workers={args.workers}")
+    for case in cases[:8]:
+        print(
+            f"  {case.normalized_algorithm:7s} {case.normalized_problem.upper():8s} "
+            f"M={case.n_obj:2d} seed={case.seed:03d} MaxFEs={case.max_fes}"
+        )
+    if len(cases) > 8:
+        print(f"  ... 其余 {len(cases) - 8} 个任务")
+    if args.dry_run:
+        return 0
 
-    run_batch(args.mode, args.algo, nobj, single_problem,
-              shared_batch_root=args.batch_root, scale_scheme=args.scale)
+    failures = []
+    completed = skipped = 0
+    with ProcessPoolExecutor(max_workers=max(1, args.workers)) as executor:
+        futures = {executor.submit(run_case, case, args.force): case for case in cases}
+        for future in as_completed(futures):
+            case = futures[future]
+            label = f"{case.normalized_problem.upper()} M{case.n_obj} {case.normalized_algorithm} seed={case.seed}"
+            try:
+                result = future.result()
+                if result["status"] == "skipped":
+                    skipped += 1
+                    print(f"[跳过] {label}")
+                else:
+                    completed += 1
+                    print(f"[完成] {label} FE={result['n_eval']} {result['runtime_seconds']:.2f}s")
+            except Exception as exc:  # 单任务失败不能中断整个正式批次
+                failures.append({"case": case.to_dict(), "error": repr(exc)})
+                print(f"[失败] {label}: {exc}", file=sys.stderr)
+
+    root = Path(cases[0].output_root)
+    root.mkdir(parents=True, exist_ok=True)
+    failure_path = root / "failures.json"
+    with failure_path.open("w", encoding="utf-8") as handle:
+        json.dump(failures, handle, ensure_ascii=False, indent=2)
+    print(f"完成={completed} 跳过={skipped} 失败={len(failures)} | {root}")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    multiprocessing.freeze_support()
+    raise SystemExit(main())
