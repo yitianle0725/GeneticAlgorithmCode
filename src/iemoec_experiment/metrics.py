@@ -8,16 +8,23 @@ from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.ref_dirs import get_reference_directions
 
 
-_REFERENCE_FRONT_CACHE: dict[tuple, np.ndarray] = {}
+_REFERENCE_DATA_CACHE: dict[
+    tuple,
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+] = {}
 
 
-def reference_front(problem, n_points: int = 1000) -> np.ndarray:
+def reference_data(
+    problem,
+    n_points: int = 1000,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """返回进程内共享的参考 PF、ideal point 和 nadir point。"""
     cache_key = (
         problem.__class__.__module__, problem.__class__.__name__,
         problem.n_var, problem.n_obj, n_points,
     )
-    if cache_key in _REFERENCE_FRONT_CACHE:
-        return _REFERENCE_FRONT_CACHE[cache_key]
+    if cache_key in _REFERENCE_DATA_CACHE:
+        return _REFERENCE_DATA_CACHE[cache_key]
     if problem.n_obj <= 5:
         ref_dirs = get_reference_directions(
             "energy", problem.n_obj, n_points=n_points, seed=1
@@ -30,25 +37,12 @@ def reference_front(problem, n_points: int = 1000) -> np.ndarray:
     pf = problem.pareto_front(ref_dirs=ref_dirs)
     if pf is None or len(pf) == 0:
         raise ValueError(f"{problem.__class__.__name__} 无法生成参考 Pareto front")
-    result = np.asarray(pf, dtype=float)
-    _REFERENCE_FRONT_CACHE[cache_key] = result
-    return result
-
-
-def shared_bounds(problem, ref_pf: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """边界仅取自问题定义/真实 PF，绝不从单个算法的解集估计。"""
-    ideal = problem.ideal_point()
-    nadir = problem.nadir_point()
-    if ideal is None:
-        ideal = np.min(ref_pf, axis=0)
-    if nadir is None:
-        nadir = np.max(ref_pf, axis=0)
-    ideal = np.asarray(ideal, dtype=float)
-    nadir = np.asarray(nadir, dtype=float)
-    span = nadir - ideal
-    if np.any(~np.isfinite(span)) or np.any(span <= 1e-12):
-        ideal, nadir = np.min(ref_pf, axis=0), np.max(ref_pf, axis=0)
-    return ideal, nadir
+    ref_pf = np.asarray(pf, dtype=float)
+    ideal = np.min(ref_pf, axis=0)
+    nadir = np.max(ref_pf, axis=0)
+    data = (ref_pf, ideal, nadir)
+    _REFERENCE_DATA_CACHE[cache_key] = data
+    return data
 
 
 def normalize(F: np.ndarray, ideal: np.ndarray, nadir: np.ndarray) -> np.ndarray:
@@ -74,8 +68,10 @@ def spacing(F: np.ndarray) -> float:
 
 class MetricSuite:
     def __init__(self, problem, n_reference_points: int = 1000, hv_samples: int = 20000):
-        self.ref_pf = reference_front(problem, n_reference_points)
-        self.ideal, self.nadir = shared_bounds(problem, self.ref_pf)
+        self.ref_pf, self.ideal, self.nadir = reference_data(
+            problem,
+            n_reference_points,
+        )
         self.igd_plus = IGDPlus(self.ref_pf)
         self.gd = GD(self.ref_pf)
         self.hv_method = "exact" if problem.n_obj <= 5 else "monte_carlo"

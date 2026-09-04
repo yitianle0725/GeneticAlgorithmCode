@@ -50,6 +50,28 @@ class ProblemTests(unittest.TestCase):
 
 
 class MetricTests(unittest.TestCase):
+    def test_high_dimensional_reference_cache_across_problem_instances(self):
+        for problem_name in ("dtlz1", "dtlz2", "dtlz3", "dtlz4"):
+            for n_obj in (5, 10):
+                problem_a = make_problem(problem_name, n_obj)
+                suite_a = MetricSuite(
+                    problem_a,
+                    n_reference_points=100,
+                    hv_samples=1000,
+                )
+
+                # 新 Problem 实例命中相同的进程内缓存键。
+                problem_b = make_problem(problem_name, n_obj)
+                suite_b = MetricSuite(
+                    problem_b,
+                    n_reference_points=100,
+                    hv_samples=1000,
+                )
+
+                np.testing.assert_allclose(suite_a.ref_pf, suite_b.ref_pf)
+                np.testing.assert_allclose(suite_a.ideal, suite_b.ideal)
+                np.testing.assert_allclose(suite_a.nadir, suite_b.nadir)
+
     def test_high_dimensional_hv_is_deterministic_monte_carlo(self):
         problem = make_problem("dtlz2", 8)
         suite_a = MetricSuite(problem, n_reference_points=30, hv_samples=1000)
