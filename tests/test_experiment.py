@@ -95,6 +95,18 @@ class RunnerTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_iemoec_rejects_zero_inner_generations(self):
+        for field_name in ("inner_generations_early", "inner_generations_late"):
+            values = {field_name: 0}
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, "岛内演化代数"):
+                    IEMOECConfig(**values).validate()
+
+    def test_iemoec_defaults_to_one_inner_generation(self):
+        config = IEMOECConfig()
+        self.assertEqual(config.inner_generations_early, 1)
+        self.assertEqual(config.inner_generations_late, 1)
+
     def case(self, algorithm: str, seed: int = 7):
         return ExperimentCase(
             algorithm, "dtlz2", 3, seed, 182,

@@ -28,7 +28,7 @@ python -c "import pymoo; print(pymoo.__version__)"
 DTLZ2、M=3、1 个种子、4 个算法，预算为 20 倍共同种群大小：
 
 ```powershell
-python script/run.py --preset smoke --workers 4
+python scripts/run.py --preset smoke --workers 4
 ```
 
 ### 2. 预实验
@@ -36,7 +36,7 @@ python script/run.py --preset smoke --workers 4
 DTLZ1–4、M=3/5/10、5 个种子：
 
 ```powershell
-python script/run.py --preset pilot --workers 6
+python scripts/run.py --preset pilot --workers 6
 ```
 
 ### 3. 正式实验
@@ -44,7 +44,7 @@ python script/run.py --preset pilot --workers 6
 DTLZ1–4、WFG1/2/4/9、M=3/5/8/10/15、30 个种子：
 
 ```powershell
-python script/run.py --preset formal --workers 6
+python scripts/run.py --preset formal --workers 6
 ```
 
 正式实验任务很多。建议先完成 smoke 和 pilot，确认参数后再启动。仅使用任务级并行，不要同时开启岛级多进程。
@@ -54,7 +54,7 @@ python script/run.py --preset formal --workers 6
 推荐用 `--evals-per-pop` 定义预算，它会自动得到各目标数下与共同种群规模整除的 `MaxFEs`：
 
 ```powershell
-python script/run.py --preset custom `
+python scripts/run.py --preset custom `
   --algorithms NSGA2 NSGA3 MOEAD IEMOEC `
   --problems dtlz2 wfg1 `
   --objectives 3,5,10 `
@@ -75,6 +75,10 @@ python script/run.py --preset custom `
 - `--iemoec-survival rank`：关闭外层 NSGA-III survival，供消融实验使用。
 - `--iemoec-crowding`：启用拥挤度，供消融实验使用。
 - `--no-recombination`：关闭跨岛组合，供消融实验使用。
+- `--inner-generations-early`：前期每轮岛内演化代数，默认为 1。
+- `--inner-generations-late`：后期每轮岛内演化代数，默认为 1。
+
+IEMOEC 默认采用 G1/1，使每轮岛内演化后立即进行全局更新。可用上述两个参数复现实验旧配置 G3/5。
 
 若已有结果的 `config.json` 与新任务不同，程序会拒绝混写。应更换 `--run-name`，或确认后使用 `--force`。
 
@@ -98,8 +102,8 @@ results/my_pilot/
 ## 汇总、统计与作图
 
 ```powershell
-python script/summarize.py results/my_pilot
-python script/plot_results.py results/my_pilot --kind all
+python scripts/summarize.py results/my_pilot
+python scripts/plot_results.py results/my_pilot --kind all
 ```
 
 汇总产物包括：
@@ -127,7 +131,7 @@ src/iemoec_experiment/
   metrics.py     公共参考 PF、归一化和指标
   iemoec.py      IEMOEC 自定义核心
   runner.py      单任务执行、检查点和标准结果输出
-script/
+scripts/
   run.py         批量实验/并行/断点续跑入口
   summarize.py   多种子统计检验
   plot_results.py 统一离线绘图

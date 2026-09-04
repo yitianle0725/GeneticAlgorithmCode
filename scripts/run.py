@@ -93,6 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iemoec-crowding", action="store_true")
     parser.add_argument("--no-recombination", action="store_true")
     parser.add_argument("--island-population", type=int, default=20)
+    parser.add_argument("--inner-generations-early", type=int, default=1)
+    parser.add_argument("--inner-generations-late", type=int, default=1)
     parser.add_argument("--partners-per-elite", type=int, default=2)
     return parser
 
@@ -109,6 +111,8 @@ def resolve_cases(args) -> list[ExperimentCase]:
     output_root = str(Path(args.output_root) / run_name)
     iemoec = IEMOECConfig(
         island_population=args.island_population,
+        inner_generations_early=args.inner_generations_early,
+        inner_generations_late=args.inner_generations_late,
         partners_per_elite=args.partners_per_elite,
         outer_survival=args.iemoec_survival,
         use_crowding=args.iemoec_crowding,

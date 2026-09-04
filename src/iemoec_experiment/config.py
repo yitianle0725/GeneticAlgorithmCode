@@ -23,8 +23,8 @@ class IEMOECConfig:
     min_origin: int = 20
     island_population: int = 20
     islands_per_objective: int = 2
-    inner_generations_early: int = 3
-    inner_generations_late: int = 5
+    inner_generations_early: int = 1
+    inner_generations_late: int = 1
     switch_ratio: float = 0.4
     aggregation_epsilon: float = 1e-3
     expansion_mutation_probability: float = 0.15
@@ -39,6 +39,8 @@ class IEMOECConfig:
             raise ValueError("origin_ratio 必须在 (0, 1] 内")
         if self.min_origin < 2 or self.island_population < 2:
             raise ValueError("种群大小必须至少为 2")
+        if self.inner_generations_early < 1 or self.inner_generations_late < 1:
+            raise ValueError("岛内演化代数必须至少为 1")
         if self.islands_per_objective not in (1, 2):
             raise ValueError("islands_per_objective 仅支持 1 或 2")
         if self.outer_survival not in ("nsga3", "rank"):
