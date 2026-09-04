@@ -94,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-recombination", action="store_true")
     parser.add_argument("--retain-island-state", action="store_true")
     parser.add_argument("--fixed-island-definitions", action="store_true")
+    parser.add_argument("--origin-ratio", type=float, default=0.2)
     parser.add_argument("--island-population", type=int, default=20)
     parser.add_argument("--inner-generations-early", type=int, default=1)
     parser.add_argument("--inner-generations-late", type=int, default=1)
@@ -112,6 +113,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
     run_name = args.run_name or args.preset
     output_root = str(Path(args.output_root) / run_name)
     iemoec = IEMOECConfig(
+        origin_ratio=args.origin_ratio,
         island_population=args.island_population,
         inner_generations_early=args.inner_generations_early,
         inner_generations_late=args.inner_generations_late,

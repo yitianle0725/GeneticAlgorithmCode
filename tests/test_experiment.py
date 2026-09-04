@@ -102,10 +102,17 @@ class RunnerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "岛内演化代数"):
                     IEMOECConfig(**values).validate()
 
+    def test_iemoec_rejects_invalid_origin_ratio(self):
+        for origin_ratio in (0.0, 1.01):
+            with self.subTest(origin_ratio=origin_ratio):
+                with self.assertRaisesRegex(ValueError, "origin_ratio"):
+                    IEMOECConfig(origin_ratio=origin_ratio).validate()
+
     def test_iemoec_defaults_to_one_inner_generation(self):
         config = IEMOECConfig()
         self.assertEqual(config.inner_generations_early, 1)
         self.assertEqual(config.inner_generations_late, 1)
+        self.assertEqual(config.origin_ratio, 0.2)
         self.assertFalse(config.retain_island_state)
 
     def case(self, algorithm: str, seed: int = 7):
@@ -145,6 +152,7 @@ class RunnerTests(unittest.TestCase):
             )
 
             if algorithm == "IEMOEC":
+                self.assertEqual(result["origin_population_size"], 20)
                 later_checkpoints = [
                     row for row in checkpoints if int(row["fe"]) > 91
                 ]

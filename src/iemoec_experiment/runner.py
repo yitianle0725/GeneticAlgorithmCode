@@ -165,6 +165,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         pop_size = algorithm.pop_size
         extra["outer_iterations"] = outer_iterations
         extra["global_selection_count"] = outer_iterations + 1
+        extra["origin_population_size"] = algorithm.n_origin
         extra["island_fes_total"] = int(
             sum(row["island_fes"] for row in algorithm.outer_records)
         )

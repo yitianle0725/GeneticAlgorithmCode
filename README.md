@@ -77,12 +77,14 @@ python scripts/run.py --preset custom `
 - `--no-recombination`：关闭跨岛组合，供消融实验使用。
 - `--retain-island-state`：跨外循环继续演化已有岛种群，供消融实验使用。
 - `--fixed-island-definitions`：固定岛权重但仍逐轮重建，用作状态保留的严格对照。
+- `--origin-ratio`：起源种群占共同种群的比例，默认为 0.2。
 - `--inner-generations-early`：前期每轮岛内演化代数，默认为 1。
 - `--inner-generations-late`：后期每轮岛内演化代数，默认为 1。
 
 IEMOEC 默认采用 G1/1，使每轮岛内演化后立即进行全局更新。可用上述两个参数复现实验旧配置 G3/5。
 默认每轮从最新 origin 重建岛种群，不保留上一轮岛状态。保留状态会固定岛身份，适合通过
 `--retain-island-state` 复现实验消融，但不作为推荐配置。
+起源种群比例推荐保持 0.2；更大的比例可用 `--origin-ratio` 进行消融实验。
 
 若已有结果的 `config.json` 与新任务不同，程序会拒绝混写。应更换 `--run-name`，或确认后使用 `--force`。
 
