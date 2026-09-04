@@ -148,22 +148,28 @@ class IEMOECRunner:
         self.origin = self._evaluate(self.origin)
         self.candidate_pool = self.origin
 
-    def _island_specs(self):
-        F = self.origin.get("F")
-        ideal = np.min(F, axis=0)
+    def _island_definitions(self):
+        """创建一次岛身份，使状态消融不受权重重采样干扰。"""
         specs = []
         for m in range(self.problem.n_obj):
             weight = np.full(self.problem.n_obj, self.config.aggregation_epsilon)
             weight[m] = 1.0
-            specs.append((int(np.argmin(F[:, m])), weight, m))
+            specs.append((weight, m))
         if self.config.islands_per_objective == 2:
             weights = self.rng.dirichlet(np.ones(self.problem.n_obj), self.problem.n_obj)
-            for m, weight in enumerate(weights):
-                score = np.max(weight * np.abs(F - ideal), axis=1)
-                specs.append((int(np.argmin(score)), weight, None))
+            for weight in weights:
+                specs.append((weight, None))
         return specs
 
-    def _expand_island(self, ancestor, weight) -> Population:
+    def _ancestor_index(self, weight: np.ndarray, objective: int | None) -> int:
+        F = self.origin.get("F")
+        if objective is not None:
+            return int(np.argmin(F[:, objective]))
+        ideal = np.min(F, axis=0)
+        score = np.max(weight * np.abs(F - ideal), axis=1)
+        return int(np.argmin(score))
+
+    def _expand_island(self, ancestor) -> Population:
         target = self.config.island_population
         n_children = min(target - 1, self.remaining)
         island = Population.create(ancestor.copy())
@@ -177,6 +183,17 @@ class IEMOECRunner:
         )
         children = self._evaluate(children)
         return _merge(island, children)
+
+    def _create_islands(self, definitions) -> tuple[list[Population], list[np.ndarray]]:
+        islands = []
+        weights = []
+        for weight, objective in definitions:
+            ancestor_idx = self._ancestor_index(weight, objective)
+            islands.append(self._expand_island(self.origin[ancestor_idx]))
+            weights.append(weight)
+            if self.remaining <= 0:
+                break
+        return islands, weights
 
     def _evolve_island(self, island: Population, weight, phase: str) -> Population:
         n = len(island)
@@ -233,6 +250,11 @@ class IEMOECRunner:
 
     def run(self) -> tuple[Population, int]:
         self._initialize()
+        island_definitions = None
+        if self.config.retain_island_state or self.config.fixed_island_definitions:
+            island_definitions = self._island_definitions()
+        islands: list[Population] = []
+        weights: list[np.ndarray] = []
         outer = 0
         while self.remaining > 0 and len(self.origin):
             fe_start = self.n_eval
@@ -243,13 +265,10 @@ class IEMOECRunner:
                 if phase == "aggregation"
                 else self.config.inner_generations_late
             )
-            islands = []
-            weights = []
-            for ancestor_idx, weight, _ in self._island_specs():
-                islands.append(self._expand_island(self.origin[ancestor_idx], weight))
-                weights.append(weight)
-                if self.remaining <= 0:
-                    break
+            reuse_islands = self.config.retain_island_state and bool(islands)
+            if not reuse_islands:
+                definitions = island_definitions or self._island_definitions()
+                islands, weights = self._create_islands(definitions)
             fe_after_expansion = self.n_eval
             for _ in range(generations):
                 for i in range(len(islands)):
@@ -284,6 +303,7 @@ class IEMOECRunner:
                 "recombination_offspring": len(recombined),
                 "origin_population_size": len(self.origin),
                 "candidate_population_size": len(self.candidate_pool),
+                "island_state_reused": reuse_islands,
             }
             if self.on_outer_selection is not None:
                 event_metrics = self.on_outer_selection(self.n_eval, self.origin)

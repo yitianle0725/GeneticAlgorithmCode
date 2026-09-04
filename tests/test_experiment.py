@@ -106,6 +106,7 @@ class RunnerTests(unittest.TestCase):
         config = IEMOECConfig()
         self.assertEqual(config.inner_generations_early, 1)
         self.assertEqual(config.inner_generations_late, 1)
+        self.assertFalse(config.retain_island_state)
 
     def case(self, algorithm: str, seed: int = 7):
         return ExperimentCase(
@@ -200,6 +201,36 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(
             sum(int(row["island_fes"]) for row in diagnostics),
             result["island_fes_total"],
+        )
+        self.assertTrue(
+            all(row["island_state_reused"] == "False" for row in diagnostics)
+        )
+
+    def test_iemoec_can_retain_island_state_between_outer_iterations(self):
+        config = IEMOECConfig(
+            island_population=4,
+            retain_island_state=True,
+        )
+        case = ExperimentCase(
+            "IEMOEC", "dtlz2", 3, 13, 273,
+            output_root=self.output, history_points=3, reference_points=30,
+            iemoec=config,
+        )
+        result = run_case(case, force=True)
+        with (case.output_dir / "iemoec_diagnostics.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as handle:
+            diagnostics = list(csv.DictReader(handle))
+
+        self.assertGreater(len(diagnostics), 1)
+        self.assertGreater(int(diagnostics[0]["expansion_fes"]), 0)
+        self.assertTrue(
+            all(row["island_state_reused"] == "True" for row in diagnostics[1:])
+        )
+        self.assertTrue(all(int(row["expansion_fes"]) == 0 for row in diagnostics[1:]))
+        self.assertEqual(
+            result["island_expansion_fes_total"],
+            int(diagnostics[0]["expansion_fes"]),
         )
 
 

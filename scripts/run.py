@@ -92,6 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iemoec-survival", choices=["nsga3", "rank"], default="nsga3")
     parser.add_argument("--iemoec-crowding", action="store_true")
     parser.add_argument("--no-recombination", action="store_true")
+    parser.add_argument("--retain-island-state", action="store_true")
+    parser.add_argument("--fixed-island-definitions", action="store_true")
     parser.add_argument("--island-population", type=int, default=20)
     parser.add_argument("--inner-generations-early", type=int, default=1)
     parser.add_argument("--inner-generations-late", type=int, default=1)
@@ -117,6 +119,8 @@ def resolve_cases(args) -> list[ExperimentCase]:
         outer_survival=args.iemoec_survival,
         use_crowding=args.iemoec_crowding,
         enable_recombination=not args.no_recombination,
+        retain_island_state=args.retain_island_state,
+        fixed_island_definitions=args.fixed_island_definitions,
     )
     cases = []
     for problem in problems:

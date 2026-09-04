@@ -33,6 +33,8 @@ class IEMOECConfig:
     outer_survival: str = "nsga3"
     use_crowding: bool = False
     enable_recombination: bool = True
+    retain_island_state: bool = False
+    fixed_island_definitions: bool = False
 
     def validate(self) -> None:
         if not 0 < self.origin_ratio <= 1:

@@ -168,6 +168,12 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         extra["island_fes_total"] = int(
             sum(row["island_fes"] for row in algorithm.outer_records)
         )
+        extra["island_expansion_fes_total"] = int(
+            sum(row["expansion_fes"] for row in algorithm.outer_records)
+        )
+        extra["island_evolution_fes_total"] = int(
+            sum(row["island_evolution_fes"] for row in algorithm.outer_records)
+        )
         extra["recombination_offspring_total"] = int(
             sum(row["recombination_offspring"] for row in algorithm.outer_records)
         )
