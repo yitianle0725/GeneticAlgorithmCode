@@ -10,7 +10,7 @@ import numpy as np
 from pymoo.core.callback import Callback
 from pymoo.optimize import minimize
 
-from .config import ExperimentCase
+from .config import ALGORITHM_LABELS, ExperimentCase
 from .factory import make_baseline
 from .iemoec import IEMOECRunner
 from .metrics import MetricSuite
@@ -44,9 +44,35 @@ class HistoryRecorder(Callback):
             self.rows.append({
                 "fe": int(n_eval),
                 "runtime_seconds": float(time.perf_counter() - self.started),
+                "event": "checkpoint",
                 **values,
             })
             self._next += 1
+
+    def record_event(self, n_eval: int, population, event: str) -> dict:
+        """记录检查点之外的重要算法状态，例如 IEMOEC 外层筛选。"""
+        values = self.suite.calculate(population.get("F"), include_hv=self.include_hv)
+        row = {
+            "fe": int(n_eval),
+            "runtime_seconds": float(time.perf_counter() - self.started),
+            "event": event,
+            **values,
+        }
+        self.rows.append(row)
+        return values
+
+    def finalize(self, n_eval: int, population, final_values: dict) -> None:
+        """保证历史末行与最终 metrics 使用同一批目标值和指标。"""
+        final_row = {
+            "fe": int(n_eval),
+            "runtime_seconds": float(time.perf_counter() - self.started),
+            "event": "final",
+            **final_values,
+        }
+        if self.rows and int(self.rows[-1]["fe"]) == int(n_eval):
+            self.rows[-1] = final_row
+        else:
+            self.rows.append(final_row)
 
     def notify(self, algorithm):
         self.record(int(algorithm.evaluator.n_eval), algorithm.pop)
@@ -56,7 +82,14 @@ def _write_history(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        preferred = [
+            "fe", "runtime_seconds", "event", "igd_plus", "gd", "hv",
+            "spacing", "onvg", "nd_ratio",
+        ]
+        available = {key for row in rows for key in row}
+        fieldnames = [key for key in preferred if key in available]
+        fieldnames.extend(sorted(available - set(fieldnames)))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -115,11 +148,23 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
             problem,
             case,
             on_evaluation=lambda fe, pop: history.record(fe, pop),
+            on_outer_selection=lambda fe, pop: history.record_event(
+                fe,
+                pop,
+                "outer_selection",
+            ),
         )
         population, outer_iterations = algorithm.run()
         n_eval = algorithm.n_eval
         pop_size = algorithm.pop_size
         extra["outer_iterations"] = outer_iterations
+        extra["global_selection_count"] = outer_iterations + 1
+        extra["island_fes_total"] = int(
+            sum(row["island_fes"] for row in algorithm.outer_records)
+        )
+        extra["recombination_offspring_total"] = int(
+            sum(row["recombination_offspring"] for row in algorithm.outer_records)
+        )
     else:
         algorithm, pop_size, _ = make_baseline(case)
         if case.max_fes < pop_size:
@@ -141,14 +186,16 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         n_eval = int(result.algorithm.evaluator.n_eval)
 
     runtime = time.perf_counter() - started
-    history.record(n_eval, population)
     if n_eval != case.max_fes:
         raise RuntimeError(f"FE 预算违反：期望 {case.max_fes}，实际 {n_eval}")
     F = np.asarray(population.get("F"), dtype=float)
     if not np.all(np.isfinite(F)):
         raise RuntimeError("最终目标值含 NaN/Inf")
+    final_values = suite.calculate(F, include_hv=True)
+    history.finalize(n_eval, population, final_values)
     metrics = {
         "algorithm": case.normalized_algorithm,
+        "algorithm_label": ALGORITHM_LABELS[case.normalized_algorithm],
         "problem": case.normalized_problem,
         "n_obj": case.n_obj,
         "seed": case.seed,
@@ -158,10 +205,12 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         "reference_population_size": int(pop_size),
         "runtime_seconds": float(runtime),
         "hv_method": suite.hv_method,
-        **suite.calculate(F, include_hv=True),
+        **final_values,
         **extra,
     }
     _write_history(output_dir / "history.csv", history.rows)
+    if case.normalized_algorithm == "IEMOEC":
+        _write_history(output_dir / "iemoec_diagnostics.csv", algorithm.outer_records)
     _write_population(output_dir / "final_population.csv", population)
     _json_dump(output_dir / "metrics.json", metrics)
     return {"status": "completed", "output_dir": str(output_dir), **metrics}

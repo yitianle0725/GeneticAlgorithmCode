@@ -7,6 +7,12 @@ from typing import Any
 
 SUPPORTED_ALGORITHMS = ("NSGA2", "NSGA3", "MOEAD", "IEMOEC")
 SUPPORTED_OBJECTIVES = (2, 3, 5, 8, 10, 15)
+ALGORITHM_LABELS = {
+    "NSGA2": "NSGA-II",
+    "NSGA3": "NSGA-III",
+    "MOEAD": "MOEA/D-TCH",
+    "IEMOEC": "IEMOEC",
+}
 
 
 @dataclass(frozen=True)

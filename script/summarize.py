@@ -15,6 +15,12 @@ from scipy.stats import friedmanchisquare, rankdata, wilcoxon
 
 METRICS = ("igd_plus", "gd", "hv", "spacing", "nd_ratio", "runtime_seconds")
 LOWER_IS_BETTER = {"igd_plus", "gd", "spacing", "runtime_seconds"}
+ALGORITHM_LABELS = {
+    "NSGA2": "NSGA-II",
+    "NSGA3": "NSGA-III",
+    "MOEAD": "MOEA/D-TCH",
+    "IEMOEC": "IEMOEC",
+}
 
 
 def load_rows(root: Path) -> list[dict]:
@@ -56,7 +62,13 @@ def summarize(rows: list[dict]) -> list[dict]:
         groups[(row["problem"], row["n_obj"], row["algorithm"])].append(row)
     output = []
     for (problem, n_obj, algorithm), values in sorted(groups.items()):
-        item = {"problem": problem, "n_obj": n_obj, "algorithm": algorithm, "n": len(values)}
+        item = {
+            "problem": problem,
+            "n_obj": n_obj,
+            "algorithm": algorithm,
+            "algorithm_label": ALGORITHM_LABELS.get(algorithm, algorithm),
+            "n": len(values),
+        }
         for metric in METRICS:
             data = np.asarray([value[metric] for value in values], dtype=float)
             item[f"{metric}_mean"] = float(np.mean(data))

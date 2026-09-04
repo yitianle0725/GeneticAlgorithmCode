@@ -38,6 +38,7 @@ class IEMOECRunner:
         problem,
         case: ExperimentCase,
         on_evaluation: Callable[[int, Population], None] | None = None,
+        on_outer_selection: Callable[[int, Population], dict | None] | None = None,
     ):
         self.problem = problem
         self.case = case
@@ -59,8 +60,10 @@ class IEMOECRunner:
             eta=20,
         )
         self.on_evaluation = on_evaluation
+        self.on_outer_selection = on_outer_selection
         self.origin = Population.empty()
         self.candidate_pool = Population.empty()
+        self.outer_records: list[dict] = []
 
     @property
     def n_eval(self) -> int:
@@ -95,7 +98,12 @@ class IEMOECRunner:
         if len(pop) <= n_survive:
             return pop
         if self.config.use_crowding:
-            return RankAndCrowding().do(self.problem, pop, n_survive=n_survive)
+            return RankAndCrowding().do(
+                self.problem,
+                pop,
+                n_survive=n_survive,
+                random_state=self.rng,
+            )
         fronts = NonDominatedSorting().do(pop.get("F"))
         selected: list[int] = []
         for front in fronts:
@@ -122,7 +130,10 @@ class IEMOECRunner:
             from pymoo.algorithms.moo.nsga3 import ReferenceDirectionSurvival
 
             return ReferenceDirectionSurvival(self.ref_dirs).do(
-                self.problem, pop, n_survive=n_survive
+                self.problem,
+                pop,
+                n_survive=n_survive,
+                random_state=self.rng,
             )
         return self._front_truncate(pop, n_survive)
 
@@ -219,6 +230,7 @@ class IEMOECRunner:
         self._initialize()
         outer = 0
         while self.remaining > 0 and len(self.origin):
+            fe_start = self.n_eval
             progress = self.n_eval / self.case.max_fes
             phase = "aggregation" if progress < self.config.switch_ratio else "pareto"
             generations = (
@@ -233,6 +245,7 @@ class IEMOECRunner:
                 weights.append(weight)
                 if self.remaining <= 0:
                     break
+            fe_after_expansion = self.n_eval
             for _ in range(generations):
                 for i in range(len(islands)):
                     islands[i] = self._evolve_island(islands[i], weights[i], phase)
@@ -240,7 +253,9 @@ class IEMOECRunner:
                         break
                 if self.remaining <= 0:
                     break
+            fe_after_island_evolution = self.n_eval
             recombined = self._recombine(islands, weights)
+            fe_after_recombination = self.n_eval
             island_pool = _merge(*islands)
             merged_pool = _merge(self.candidate_pool, self.origin, island_pool, recombined)
             # 这是无额外评价的环境选择，不是旧版的专属 PF 变异扩展。
@@ -248,7 +263,30 @@ class IEMOECRunner:
             self.origin = self._outer_select(self.candidate_pool, self.n_origin)
             outer += 1
 
+            record = {
+                "outer_iteration": outer,
+                "phase": phase,
+                "fe_start": fe_start,
+                "fe_end": self.n_eval,
+                "expansion_fes": fe_after_expansion - fe_start,
+                "island_evolution_fes": (
+                    fe_after_island_evolution - fe_after_expansion
+                ),
+                "island_fes": fe_after_island_evolution - fe_start,
+                "recombination_fes": (
+                    fe_after_recombination - fe_after_island_evolution
+                ),
+                "recombination_offspring": len(recombined),
+                "origin_population_size": len(self.origin),
+                "candidate_population_size": len(self.candidate_pool),
+            }
+            if self.on_outer_selection is not None:
+                event_metrics = self.on_outer_selection(self.n_eval, self.origin)
+                if event_metrics:
+                    for name in ("igd_plus", "gd", "hv", "spacing", "onvg", "nd_ratio"):
+                        if name in event_metrics:
+                            record[name] = event_metrics[name]
+            self.outer_records.append(record)
+
         final = self._outer_select(self.candidate_pool, self.pop_size)
-        if self.on_evaluation is not None:
-            self.on_evaluation(self.n_eval, final)
         return final, outer

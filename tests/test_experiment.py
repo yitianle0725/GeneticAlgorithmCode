@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import sys
 import tempfile
@@ -105,22 +106,33 @@ class RunnerTests(unittest.TestCase):
 
     def test_every_algorithm_obeys_identical_fe_budget(self):
         for algorithm in ("NSGA2", "NSGA3", "MOEAD", "IEMOEC"):
-            result = run_case(self.case(algorithm), force=True)
+            case = self.case(algorithm)
+            result = run_case(case, force=True)
             self.assertEqual(result["n_eval"], 182)
             self.assertEqual(result["reference_population_size"], 91)
             self.assertEqual(result["population_size"], 91)
             self.assertTrue(np.isfinite(result["igd_plus"]))
+            with (case.output_dir / "history.csv").open(
+                encoding="utf-8-sig",
+                newline="",
+            ) as handle:
+                history = list(csv.DictReader(handle))
+            final_history = history[-1]
+            self.assertEqual(int(final_history["fe"]), result["n_eval"])
+            self.assertAlmostEqual(float(final_history["igd_plus"]), result["igd_plus"])
+            self.assertAlmostEqual(float(final_history["hv"]), result["hv"])
 
     def test_seed_is_reproducible_and_completed_case_is_skipped(self):
-        case = self.case("NSGA2")
-        first = run_case(case, force=True)
-        with (case.output_dir / "final_population.csv").open("rb") as handle:
-            population_bytes = handle.read()
-        second = run_case(case)
-        self.assertEqual(second["status"], "skipped")
-        run_case(case, force=True)
-        with (case.output_dir / "final_population.csv").open("rb") as handle:
-            self.assertEqual(population_bytes, handle.read())
+        for algorithm in ("NSGA2", "IEMOEC"):
+            case = self.case(algorithm)
+            run_case(case, force=True)
+            with (case.output_dir / "final_population.csv").open("rb") as handle:
+                population_bytes = handle.read()
+            second = run_case(case)
+            self.assertEqual(second["status"], "skipped")
+            run_case(case, force=True)
+            with (case.output_dir / "final_population.csv").open("rb") as handle:
+                self.assertEqual(population_bytes, handle.read())
 
     def test_changed_configuration_requires_force(self):
         original = self.case("NSGA2")
@@ -151,6 +163,14 @@ class RunnerTests(unittest.TestCase):
         )
         result = run_case(case, force=True)
         self.assertEqual(result["n_eval"], 182)
+        diagnostics_path = case.output_dir / "iemoec_diagnostics.csv"
+        with diagnostics_path.open(encoding="utf-8-sig", newline="") as handle:
+            diagnostics = list(csv.DictReader(handle))
+        self.assertEqual(len(diagnostics), result["outer_iterations"])
+        self.assertEqual(
+            sum(int(row["island_fes"]) for row in diagnostics),
+            result["island_fes_total"],
+        )
 
 
 if __name__ == "__main__":

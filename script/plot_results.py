@@ -13,6 +13,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+ALGORITHM_LABELS = {
+    "NSGA2": "NSGA-II",
+    "NSGA3": "NSGA-III",
+    "MOEAD": "MOEA/D-TCH",
+    "IEMOEC": "IEMOEC",
+}
+
+
 def read_csv(path: Path) -> list[dict]:
     with path.open(encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
@@ -33,7 +41,7 @@ def convergence(root: Path, output: Path) -> None:
         median = np.median(curves, axis=0)
         low, high = np.percentile(curves, [25, 75], axis=0)
         plt.figure(figsize=(6.4, 4.2))
-        plt.plot(x, median, label=algorithm)
+        plt.plot(x, median, label=ALGORITHM_LABELS.get(algorithm, algorithm))
         plt.fill_between(x, low, high, alpha=0.25, label="IQR")
         plt.xlabel("Function Evaluations")
         plt.ylabel("IGD+")
@@ -52,8 +60,9 @@ def boxplots(root: Path, output: Path) -> None:
         groups[(row["problem"], row["n_obj"])][row["algorithm"]].append(row["igd_plus"])
     for (problem, n_obj), values in groups.items():
         algorithms = sorted(values)
+        labels = [ALGORITHM_LABELS.get(algorithm, algorithm) for algorithm in algorithms]
         plt.figure(figsize=(7.2, 4.4))
-        plt.boxplot([values[a] for a in algorithms], tick_labels=algorithms, showmeans=True)
+        plt.boxplot([values[a] for a in algorithms], tick_labels=labels, showmeans=True)
         plt.ylabel("Final IGD+")
         plt.title(f"{problem.upper()} M={n_obj}")
         plt.tight_layout()
@@ -87,7 +96,11 @@ def parallel_coordinates(root: Path, output: Path) -> None:
             plt.plot(range(cfg["n_obj"]), line, alpha=0.16, linewidth=0.7)
         plt.xticks(range(cfg["n_obj"]), objective_columns)
         plt.ylabel("Shared normalized objective (display only)")
-        plt.title(f"{cfg['problem'].upper()} M={cfg['n_obj']} {cfg['algorithm']} seed={cfg['seed']}")
+        algorithm_label = ALGORITHM_LABELS.get(cfg["algorithm"], cfg["algorithm"])
+        plt.title(
+            f"{cfg['problem'].upper()} M={cfg['n_obj']} "
+            f"{algorithm_label} seed={cfg['seed']}"
+        )
         plt.tight_layout()
         plt.savefig(output / f"parallel_{cfg['problem']}_M{cfg['n_obj']}_{cfg['algorithm']}_s{cfg['seed']:03d}.png", dpi=180)
         plt.close()

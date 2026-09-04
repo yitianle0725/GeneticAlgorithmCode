@@ -4,7 +4,7 @@
 
 ## 设计原则
 
-- NSGA-II、NSGA-III、MOEA/D、DTLZ、WFG、SBX、多项式变异、非支配排序和质量指标直接使用 pymoo。
+- NSGA-II、NSGA-III、MOEA/D-TCH、DTLZ、WFG、SBX、多项式变异、非支配排序和质量指标直接使用 pymoo。
 - 四个算法在相同问题与目标数下共享种群规模，并严格使用相同 `MaxFEs`。
 - 随机种子从命令行一直传入算法；同一问题的四算法使用相同种子集合。
 - 正式实验不使用 HV/IGD 早停，不提供 IEMOEC 专属的额外 PF 扩展。
@@ -93,7 +93,7 @@ results/my_pilot/
   failures.json
 ```
 
-其中 `history.csv` 的横轴始终是 FE；`metrics.json` 记录最终 IGD+、GD、HV、Spacing、ONVG、第一前沿比例、运行时间和实际 FE。
+其中 `history.csv` 的横轴始终是 FE；最终行一定使用最终返回种群。IEMOEC 还会输出 `iemoec_diagnostics.csv`，记录每轮岛内 FE、重组后代数和外层筛选指标。`metrics.json` 记录最终 IGD+、GD、HV、Spacing、ONVG、第一前沿比例、运行时间和实际 FE。
 
 ## 汇总、统计与作图
 
