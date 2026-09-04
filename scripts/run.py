@@ -92,6 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iemoec-survival", choices=["nsga3", "rank"], default="nsga3")
     parser.add_argument("--iemoec-crowding", action="store_true")
     parser.add_argument("--no-recombination", action="store_true")
+    parser.add_argument("--recombination-budget-ratio", type=float, default=1.0)
+    parser.add_argument("--late-recombination-budget-ratio", type=float, default=0.25)
     parser.add_argument("--retain-island-state", action="store_true")
     parser.add_argument("--fixed-island-definitions", action="store_true")
     parser.add_argument("--origin-ratio", type=float, default=0.2)
@@ -121,6 +123,8 @@ def resolve_cases(args) -> list[ExperimentCase]:
         outer_survival=args.iemoec_survival,
         use_crowding=args.iemoec_crowding,
         enable_recombination=not args.no_recombination,
+        recombination_budget_ratio=args.recombination_budget_ratio,
+        late_recombination_budget_ratio=args.late_recombination_budget_ratio,
         retain_island_state=args.retain_island_state,
         fixed_island_definitions=args.fixed_island_definitions,
     )

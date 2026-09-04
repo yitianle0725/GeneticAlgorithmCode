@@ -212,7 +212,12 @@ class IEMOECRunner:
             return merged[np.argsort(scores)[:n]]
         return self._front_truncate(merged, n, weight=weight)
 
-    def _recombine(self, islands: list[Population], weights: list[np.ndarray]) -> Population:
+    def _recombine(
+        self,
+        islands: list[Population],
+        weights: list[np.ndarray],
+        budget_ratio: float,
+    ) -> Population:
         if not self.config.enable_recombination or self.remaining <= 0:
             return Population.empty()
         elites = []
@@ -240,7 +245,7 @@ class IEMOECRunner:
                 pair_set.add(tuple(sorted((i, int(j)))))
         pair_list = list(pair_set)
         self.rng.shuffle(pair_list)
-        requested = math.ceil(self.pop_size * self.config.recombination_budget_ratio)
+        requested = math.ceil(self.pop_size * budget_ratio)
         budget = min(requested, self.remaining)
         pairs = np.asarray(pair_list, dtype=int)
         # SBX 每组产生两个后代；只创建覆盖预算所需的 mating 数。
@@ -278,7 +283,13 @@ class IEMOECRunner:
                 if self.remaining <= 0:
                     break
             fe_after_island_evolution = self.n_eval
-            recombined = self._recombine(islands, weights)
+            recombination_ratio = self.config.recombination_budget_ratio
+            if (
+                phase == "pareto"
+                and self.config.late_recombination_budget_ratio is not None
+            ):
+                recombination_ratio = self.config.late_recombination_budget_ratio
+            recombined = self._recombine(islands, weights, recombination_ratio)
             fe_after_recombination = self.n_eval
             island_pool = _merge(*islands)
             merged_pool = _merge(self.candidate_pool, self.origin, island_pool, recombined)
@@ -301,6 +312,7 @@ class IEMOECRunner:
                     fe_after_recombination - fe_after_island_evolution
                 ),
                 "recombination_offspring": len(recombined),
+                "recombination_budget_ratio": recombination_ratio,
                 "origin_population_size": len(self.origin),
                 "candidate_population_size": len(self.candidate_pool),
                 "island_state_reused": reuse_islands,

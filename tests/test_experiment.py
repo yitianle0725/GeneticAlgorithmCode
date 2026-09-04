@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -108,11 +109,25 @@ class RunnerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "origin_ratio"):
                     IEMOECConfig(origin_ratio=origin_ratio).validate()
 
+    def test_iemoec_rejects_invalid_recombination_ratio(self):
+        invalid_configs = (
+            {"recombination_budget_ratio": -0.01},
+            {"recombination_budget_ratio": 1.01},
+            {"late_recombination_budget_ratio": -0.01},
+            {"late_recombination_budget_ratio": 1.01},
+        )
+        for values in invalid_configs:
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, "recombination_budget_ratio"):
+                    IEMOECConfig(**values).validate()
+
     def test_iemoec_defaults_to_one_inner_generation(self):
         config = IEMOECConfig()
         self.assertEqual(config.inner_generations_early, 1)
         self.assertEqual(config.inner_generations_late, 1)
         self.assertEqual(config.origin_ratio, 0.2)
+        self.assertEqual(config.recombination_budget_ratio, 1.0)
+        self.assertEqual(config.late_recombination_budget_ratio, 0.25)
         self.assertFalse(config.retain_island_state)
 
     def case(self, algorithm: str, seed: int = 7):
@@ -240,6 +255,28 @@ class RunnerTests(unittest.TestCase):
             result["island_expansion_fes_total"],
             int(diagnostics[0]["expansion_fes"]),
         )
+
+    def test_iemoec_recombination_obeys_ratio_budget(self):
+        config = IEMOECConfig(
+            island_population=4,
+            recombination_budget_ratio=0.1,
+            late_recombination_budget_ratio=0.1,
+        )
+        case = ExperimentCase(
+            "IEMOEC", "dtlz2", 3, 17, 273,
+            output_root=self.output, history_points=3, reference_points=30,
+            iemoec=config,
+        )
+        run_case(case, force=True)
+        with (case.output_dir / "iemoec_diagnostics.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as handle:
+            diagnostics = list(csv.DictReader(handle))
+
+        expected_budget = math.ceil(len(reference_directions(case)) * 0.1)
+        offspring_counts = [int(row["recombination_offspring"]) for row in diagnostics]
+        self.assertTrue(any(count > 0 for count in offspring_counts))
+        self.assertTrue(all(count <= expected_budget for count in offspring_counts))
 
 
 if __name__ == "__main__":

@@ -75,6 +75,8 @@ python scripts/run.py --preset custom `
 - `--iemoec-survival rank`：关闭外层 NSGA-III survival，供消融实验使用。
 - `--iemoec-crowding`：启用拥挤度，供消融实验使用。
 - `--no-recombination`：关闭跨岛组合，供消融实验使用。
+- `--recombination-budget-ratio`：聚合阶段的重组预算比例，默认为 1.0。
+- `--late-recombination-budget-ratio`：Pareto 阶段的重组预算比例，默认为 0.25。
 - `--retain-island-state`：跨外循环继续演化已有岛种群，供消融实验使用。
 - `--fixed-island-definitions`：固定岛权重但仍逐轮重建，用作状态保留的严格对照。
 - `--origin-ratio`：起源种群占共同种群的比例，默认为 0.2。
@@ -85,6 +87,7 @@ IEMOEC 默认采用 G1/1，使每轮岛内演化后立即进行全局更新。�
 默认每轮从最新 origin 重建岛种群，不保留上一轮岛状态。保留状态会固定岛身份，适合通过
 `--retain-island-state` 复现实验消融，但不作为推荐配置。
 起源种群比例推荐保持 0.2；更大的比例可用 `--origin-ratio` 进行消融实验。
+重组预算推荐前期使用 1.0、Pareto 阶段使用 0.25；若要使用恒定比例，应同时设置两个重组参数。
 
 若已有结果的 `config.json` 与新任务不同，程序会拒绝混写。应更换 `--run-name`，或确认后使用 `--force`。
 

@@ -30,6 +30,7 @@ class IEMOECConfig:
     expansion_mutation_probability: float = 0.15
     partners_per_elite: int = 2
     recombination_budget_ratio: float = 1.0
+    late_recombination_budget_ratio: float | None = 0.25
     outer_survival: str = "nsga3"
     use_crowding: bool = False
     enable_recombination: bool = True
@@ -49,6 +50,13 @@ class IEMOECConfig:
             raise ValueError("outer_survival 仅支持 nsga3 或 rank")
         if self.partners_per_elite < 1:
             raise ValueError("partners_per_elite 必须为正整数")
+        if not 0 <= self.recombination_budget_ratio <= 1:
+            raise ValueError("recombination_budget_ratio 必须在 [0, 1] 内")
+        if (
+            self.late_recombination_budget_ratio is not None
+            and not 0 <= self.late_recombination_budget_ratio <= 1
+        ):
+            raise ValueError("late_recombination_budget_ratio 必须在 [0, 1] 内")
 
 
 @dataclass(frozen=True)
