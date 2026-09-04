@@ -121,6 +121,24 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(int(final_history["fe"]), result["n_eval"])
             self.assertAlmostEqual(float(final_history["igd_plus"]), result["igd_plus"])
             self.assertAlmostEqual(float(final_history["hv"]), result["hv"])
+            checkpoints = [row for row in history if row["event"] == "checkpoint"]
+            expected_fes = np.linspace(182 / 3, 182, 3, dtype=int)[:-1]
+            self.assertEqual(
+                [int(row["fe"]) for row in checkpoints],
+                expected_fes.tolist(),
+            )
+            self.assertTrue(
+                all(int(row["observed_fe"]) >= int(row["fe"]) for row in checkpoints)
+            )
+
+            if algorithm == "IEMOEC":
+                later_checkpoints = [
+                    row for row in checkpoints if int(row["fe"]) > 91
+                ]
+                self.assertTrue(later_checkpoints)
+                self.assertTrue(
+                    all(int(row["population_size"]) > 4 for row in later_checkpoints)
+                )
 
     def test_seed_is_reproducible_and_completed_case_is_skipped(self):
         for algorithm in ("NSGA2", "IEMOEC"):

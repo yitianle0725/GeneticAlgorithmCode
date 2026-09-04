@@ -93,7 +93,7 @@ results/my_pilot/
   failures.json
 ```
 
-其中 `history.csv` 的横轴始终是 FE；最终行一定使用最终返回种群。IEMOEC 还会输出 `iemoec_diagnostics.csv`，记录每轮岛内 FE、重组后代数和外层筛选指标。`metrics.json` 记录最终 IGD+、GD、HV、Spacing、ONVG、第一前沿比例、运行时间和实际 FE。
+其中 `history.csv` 的 `fe` 是所有算法共享的固定检查点，`observed_fe` 是批量评价跨过检查点时的实际 FE。IEMOEC 的公共检查点使用最近一次完成全局筛选后的 archive，不再记录正在演化的单个岛；最终行一定使用最终返回种群。IEMOEC 还会输出 `iemoec_diagnostics.csv`，记录每轮岛内 FE、重组后代数和外层筛选指标。`metrics.json` 记录最终 IGD+、GD、HV、Spacing、ONVG、第一前沿比例、运行时间和实际 FE。
 
 ## 汇总、统计与作图
 

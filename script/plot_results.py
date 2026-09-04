@@ -32,6 +32,11 @@ def convergence(root: Path, output: Path) -> None:
         with (path.parent / "config.json").open(encoding="utf-8") as handle:
             cfg = json.load(handle)
         rows = read_csv(path)
+        rows = [
+            row
+            for row in rows
+            if not row.get("event") or row.get("event") in ("checkpoint", "final")
+        ]
         if rows:
             groups[(cfg["problem"], cfg["n_obj"], cfg["algorithm"])].append((cfg, rows))
     for (problem, n_obj, algorithm), runs in groups.items():

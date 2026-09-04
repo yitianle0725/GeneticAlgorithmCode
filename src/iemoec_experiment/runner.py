@@ -40,11 +40,14 @@ class HistoryRecorder(Callback):
         if population is None or len(population) == 0:
             return
         while self._next < len(self.thresholds) and n_eval >= self.thresholds[self._next]:
+            checkpoint_fe = int(self.thresholds[self._next])
             values = self.suite.calculate(population.get("F"), include_hv=self.include_hv)
             self.rows.append({
-                "fe": int(n_eval),
+                "fe": checkpoint_fe,
+                "observed_fe": int(n_eval),
                 "runtime_seconds": float(time.perf_counter() - self.started),
                 "event": "checkpoint",
+                "population_size": int(len(population)),
                 **values,
             })
             self._next += 1
@@ -54,8 +57,10 @@ class HistoryRecorder(Callback):
         values = self.suite.calculate(population.get("F"), include_hv=self.include_hv)
         row = {
             "fe": int(n_eval),
+            "observed_fe": int(n_eval),
             "runtime_seconds": float(time.perf_counter() - self.started),
             "event": event,
+            "population_size": int(len(population)),
             **values,
         }
         self.rows.append(row)
@@ -65,14 +70,15 @@ class HistoryRecorder(Callback):
         """保证历史末行与最终 metrics 使用同一批目标值和指标。"""
         final_row = {
             "fe": int(n_eval),
+            "observed_fe": int(n_eval),
             "runtime_seconds": float(time.perf_counter() - self.started),
             "event": "final",
+            "population_size": int(len(population)),
             **final_values,
         }
-        if self.rows and int(self.rows[-1]["fe"]) == int(n_eval):
-            self.rows[-1] = final_row
-        else:
-            self.rows.append(final_row)
+        while self.rows and int(self.rows[-1]["fe"]) == int(n_eval):
+            self.rows.pop()
+        self.rows.append(final_row)
 
     def notify(self, algorithm):
         self.record(int(algorithm.evaluator.n_eval), algorithm.pop)
@@ -83,8 +89,8 @@ def _write_history(path: Path, rows: list[dict]) -> None:
         return
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         preferred = [
-            "fe", "runtime_seconds", "event", "igd_plus", "gd", "hv",
-            "spacing", "onvg", "nd_ratio",
+            "fe", "observed_fe", "runtime_seconds", "event", "population_size",
+            "igd_plus", "gd", "hv", "spacing", "onvg", "nd_ratio",
         ]
         available = {key for row in rows for key in row}
         fieldnames = [key for key in preferred if key in available]
@@ -147,7 +153,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         algorithm = IEMOECRunner(
             problem,
             case,
-            on_evaluation=lambda fe, pop: history.record(fe, pop),
+            on_checkpoint=lambda fe, pop: history.record(fe, pop),
             on_outer_selection=lambda fe, pop: history.record_event(
                 fe,
                 pop,

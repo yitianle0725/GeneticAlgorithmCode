@@ -37,7 +37,7 @@ class IEMOECRunner:
         self,
         problem,
         case: ExperimentCase,
-        on_evaluation: Callable[[int, Population], None] | None = None,
+        on_checkpoint: Callable[[int, Population], None] | None = None,
         on_outer_selection: Callable[[int, Population], dict | None] | None = None,
     ):
         self.problem = problem
@@ -59,7 +59,7 @@ class IEMOECRunner:
             prob_var=self.config.expansion_mutation_probability,
             eta=20,
         )
-        self.on_evaluation = on_evaluation
+        self.on_checkpoint = on_checkpoint
         self.on_outer_selection = on_outer_selection
         self.origin = Population.empty()
         self.candidate_pool = Population.empty()
@@ -73,14 +73,19 @@ class IEMOECRunner:
     def remaining(self) -> int:
         return max(0, self.case.max_fes - self.n_eval)
 
-    def _evaluate(self, pop: Population, active: Population | None = None) -> Population:
+    def _evaluate(self, pop: Population) -> Population:
         if len(pop) > self.remaining:
             pop = pop[: self.remaining]
         if not len(pop):
             return pop
         self.evaluator.eval(self.problem, pop)
-        if self.on_evaluation is not None:
-            self.on_evaluation(self.n_eval, active if active is not None else pop)
+        if self.on_checkpoint is not None:
+            # 公共 checkpoint 始终使用最近一次完成全局筛选后的 archive。
+            # 初始化阶段尚无 archive，才使用刚完成评价的起源种群。
+            checkpoint_population = self.candidate_pool
+            if len(checkpoint_population) == 0:
+                checkpoint_population = pop
+            self.on_checkpoint(self.n_eval, checkpoint_population)
         return pop
 
     def _mate(self, parent_pool: Population, pairs: np.ndarray, budget: int) -> Population:
@@ -170,7 +175,7 @@ class IEMOECRunner:
         children = self.expansion_mutation.do(
             self.problem, repeated, inplace=True, random_state=self.rng
         )
-        children = self._evaluate(children, active=island)
+        children = self._evaluate(children)
         return _merge(island, children)
 
     def _evolve_island(self, island: Population, weight, phase: str) -> Population:
@@ -182,7 +187,7 @@ class IEMOECRunner:
             order = np.append(order, order[0])
         pairs = order.reshape(-1, 2)
         offspring = self._mate(island, pairs, min(n, self.remaining))
-        offspring = self._evaluate(offspring, active=island)
+        offspring = self._evaluate(offspring)
         merged = _merge(island, offspring)
         if phase == "aggregation":
             ideal = np.min(merged.get("F"), axis=0)
@@ -224,7 +229,7 @@ class IEMOECRunner:
         # SBX 每组产生两个后代；只创建覆盖预算所需的 mating 数。
         pairs = pairs[: math.ceil(budget / 2)]
         offspring = self._mate(elite_pop, pairs, budget)
-        return self._evaluate(offspring, active=elite_pop)
+        return self._evaluate(offspring)
 
     def run(self) -> tuple[Population, int]:
         self._initialize()
