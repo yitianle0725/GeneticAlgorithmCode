@@ -27,6 +27,9 @@ class IEMOECConfig:
     inner_generations_late: int = 1
     switch_ratio: float = 0.4
     aggregation_epsilon: float = 1e-3
+    island_initialization: str = "multi_ancestor"
+    direction_neighbor_ancestors: int = 4
+    diverse_ancestors: int = 2
     expansion_mutation_probability: float = 0.15
     partners_per_elite: int = 2
     recombination_budget_ratio: float = 1.0
@@ -46,6 +49,12 @@ class IEMOECConfig:
             raise ValueError("岛内演化代数必须至少为 1")
         if self.islands_per_objective not in (1, 2):
             raise ValueError("islands_per_objective 仅支持 1 或 2")
+        if self.island_initialization not in ("single_ancestor", "multi_ancestor"):
+            raise ValueError(
+                "island_initialization 仅支持 single_ancestor 或 multi_ancestor"
+            )
+        if self.direction_neighbor_ancestors < 0 or self.diverse_ancestors < 0:
+            raise ValueError("多祖先数量不能为负数")
         if self.outer_survival not in ("nsga3", "rank"):
             raise ValueError("outer_survival 仅支持 nsga3 或 rank")
         if self.partners_per_elite < 1:

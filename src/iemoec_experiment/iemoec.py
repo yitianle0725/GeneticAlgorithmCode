@@ -162,12 +162,94 @@ class IEMOECRunner:
         return specs
 
     def _ancestor_index(self, weight: np.ndarray, objective: int | None) -> int:
-        F = self.origin.get("F")
+        scores = self._direction_scores(self.origin, weight, objective)
+        return int(np.argmin(scores))
+
+    @staticmethod
+    def _direction_scores(
+        population: Population,
+        weight: np.ndarray,
+        objective: int | None,
+    ) -> np.ndarray:
+        F = population.get("F")
         if objective is not None:
-            return int(np.argmin(F[:, objective]))
+            return F[:, objective]
         ideal = np.min(F, axis=0)
-        score = np.max(weight * np.abs(F - ideal), axis=1)
-        return int(np.argmin(score))
+        return np.max(weight * np.abs(F - ideal), axis=1)
+
+    def _decision_space_points(self, population: Population) -> np.ndarray:
+        X = np.asarray(population.get("X"), dtype=float)
+        lower = np.asarray(self.problem.xl, dtype=float)
+        upper = np.asarray(self.problem.xu, dtype=float)
+        return (X - lower) / np.maximum(upper - lower, 1e-12)
+
+    def _multi_ancestor_island(
+        self,
+        weight: np.ndarray,
+        objective: int | None,
+    ) -> Population:
+        """从已评价的全局候选池周期性建立一个多祖先岛。"""
+        source = self.candidate_pool
+        target = min(self.config.island_population, len(source))
+        if target == 0:
+            return Population.empty()
+
+        scores = self._direction_scores(source, weight, objective)
+        ranked = np.argsort(scores, kind="stable")
+        selected = [int(ranked[0])]
+
+        neighbor_count = min(
+            self.config.direction_neighbor_ancestors,
+            target - len(selected),
+        )
+        selected.extend(int(index) for index in ranked[1:1 + neighbor_count])
+
+        normalized_x = self._decision_space_points(source)
+        diverse_count = min(
+            self.config.diverse_ancestors,
+            target - len(selected),
+        )
+        for _ in range(diverse_count):
+            available = np.setdiff1d(
+                np.arange(len(source)),
+                np.asarray(selected, dtype=int),
+                assume_unique=False,
+            )
+            distances = np.linalg.norm(
+                normalized_x[available, None, :] - normalized_x[selected][None, :, :],
+                axis=2,
+            )
+            min_distances = np.min(distances, axis=1)
+            selected.append(int(available[int(np.argmax(min_distances))]))
+
+        remaining_slots = target - len(selected)
+        if remaining_slots > 0:
+            direction_pool_size = min(len(source), max(target * 2, target))
+            direction_candidates = np.setdiff1d(
+                ranked[:direction_pool_size],
+                np.asarray(selected, dtype=int),
+                assume_unique=False,
+            )
+            chosen_count = min(remaining_slots, len(direction_candidates))
+            if chosen_count:
+                chosen = self.rng.choice(
+                    direction_candidates,
+                    size=chosen_count,
+                    replace=False,
+                )
+                selected.extend(int(index) for index in np.atleast_1d(chosen))
+
+        remaining_slots = target - len(selected)
+        if remaining_slots > 0:
+            available = np.setdiff1d(
+                np.arange(len(source)),
+                np.asarray(selected, dtype=int),
+                assume_unique=False,
+            )
+            chosen = self.rng.choice(available, size=remaining_slots, replace=False)
+            selected.extend(int(index) for index in np.atleast_1d(chosen))
+
+        return Population.create(*(source[index].copy() for index in selected))
 
     def _expand_island(self, ancestor) -> Population:
         target = self.config.island_population
@@ -188,8 +270,12 @@ class IEMOECRunner:
         islands = []
         weights = []
         for weight, objective in definitions:
-            ancestor_idx = self._ancestor_index(weight, objective)
-            islands.append(self._expand_island(self.origin[ancestor_idx]))
+            if self.config.island_initialization == "multi_ancestor":
+                island = self._multi_ancestor_island(weight, objective)
+            else:
+                ancestor_idx = self._ancestor_index(weight, objective)
+                island = self._expand_island(self.origin[ancestor_idx])
+            islands.append(island)
             weights.append(weight)
             if self.remaining <= 0:
                 break
@@ -263,6 +349,7 @@ class IEMOECRunner:
         outer = 0
         while self.remaining > 0 and len(self.origin):
             fe_start = self.n_eval
+            island_source_population_size = len(self.candidate_pool)
             progress = self.n_eval / self.case.max_fes
             phase = "aggregation" if progress < self.config.switch_ratio else "pareto"
             generations = (
@@ -313,6 +400,8 @@ class IEMOECRunner:
                 ),
                 "recombination_offspring": len(recombined),
                 "recombination_budget_ratio": recombination_ratio,
+                "island_initialization": self.config.island_initialization,
+                "island_source_population_size": island_source_population_size,
                 "origin_population_size": len(self.origin),
                 "candidate_population_size": len(self.candidate_pool),
                 "island_state_reused": reuse_islands,

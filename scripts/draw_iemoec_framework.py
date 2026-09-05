@@ -32,20 +32,34 @@ def add_process(graph: Digraph, name: str, label: str, *, accent: bool = False) 
     )
 
 
-def build_graph(dpi: float = 72.45) -> Digraph:
+def add_cluster_title(cluster, label: str, *, color: str, style: str) -> None:
+    """Apply the shared publication style to one algorithm layer."""
+    cluster.attr(
+        label=label,
+        labelloc="t",
+        labeljust="l",
+        fontname="Helvetica-Bold",
+        fontsize="9.5",
+        color=color,
+        penwidth="1.1",
+        style=style,
+        margin="4",
+    )
+
+
+def build_graph(dpi: float = 72.0) -> Digraph:
     graph = Digraph("IEMOEC_framework", engine="dot")
     graph.attr(
-        rankdir="LR",
+        rankdir="TB",
         bgcolor="white",
         fontname="Helvetica",
-        fontsize="10",
-        pad="0.08",
+        fontsize="9.5",
+        pad="0",
         margin="0",
-        nodesep="0.22",
-        ranksep="0.42",
+        nodesep="0.115",
+        ranksep="0.02",
         splines="ortho",
         outputorder="edgesfirst",
-        size="7.16,4.15!",
         dpi=str(dpi),
         compound="true",
         newrank="true",
@@ -57,16 +71,16 @@ def build_graph(dpi: float = 72.45) -> Digraph:
         fontcolor=DARK,
         color=DARK,
         penwidth="0.9",
-        margin="0.08,0.05",
-        height="0.34",
+        margin="0.05,0.035",
+        height="0.30",
     )
     graph.attr(
         "edge",
         fontname="Helvetica",
-        fontsize="8.5",
+        fontsize="9",
         fontcolor=DARK,
         color=DARK,
-        arrowsize="0.62",
+        arrowsize="0.58",
         penwidth="0.9",
     )
 
@@ -74,67 +88,35 @@ def build_graph(dpi: float = 72.45) -> Digraph:
     add_process(
         graph,
         "initialize",
-        "Initialize origin population P_o\n"
-        "Float random sampling + evaluation\n"
-        "A <- P_o",
+        "Initialize P_o\nEvaluate\nA <- P_o",
     )
 
     with graph.subgraph(name="cluster_independent") as independent:
-        independent.attr(
-            label="1  INDEPENDENT SUBPOPULATION EVOLUTION",
-            labelloc="t",
-            labeljust="l",
-            fontname="Helvetica-Bold",
-            fontsize="10",
+        add_cluster_title(
+            independent,
+            "1  INDEPENDENT\nSUBPOPULATION\nEVOLUTION",
             color=DARK,
-            penwidth="1.1",
             style="rounded",
-            margin="10",
         )
         independent.node(
-            "phase_check",
-            "FE / MaxFEs\n< 0.40?",
+            "phase",
+            "Phase control\nFE ratio\n< 0.40?",
             shape="diamond",
             style="filled",
             fillcolor=BLUE,
             color=BLUE_BORDER,
             penwidth="1.15",
-            margin="0.03",
+            margin="0.02",
         )
         add_process(
             independent,
-            "aggregation",
-            "YES - Aggregation Phase\n"
-            "Tchebycheff local survival\n"
-            "recombination ratio = 1.0",
-            accent=True,
-        )
-        add_process(
-            independent,
-            "pareto",
-            "NO - Pareto Phase\n"
-            "nondominated fronts + weight tie-break\n"
-            "recombination ratio = 0.25",
-            accent=True,
-        )
-        add_process(
-            independent,
-            "define_islands",
-            "Build 2M independent islands each round\n"
-            "M axial weights + M random aggregation weights\n"
-            "select one origin ancestor per island",
-        )
-        add_process(
-            independent,
-            "expand",
-            "Single-ancestor island expansion\n"
-            "clone selected origin + Polynomial Mutation\n"
-            "evaluate mutated copies",
+            "build_islands",
+            "Periodic multi-ancestor\nconstruction from A (0 FE)",
         )
         independent.node(
             "island_bank",
-            "{2M ISLANDS (representative view)|"
-            "{Island 1|Island 2|...|Island 2M}}",
+            "{2M ISLANDS|{M axial|M random}|"
+            "direction elite + neighbors|+ diverse solutions}",
             shape="record",
             style="filled",
             fillcolor=LIGHT_GRAY,
@@ -144,196 +126,113 @@ def build_graph(dpi: float = 72.45) -> Digraph:
         add_process(
             independent,
             "local_evolution",
-            "Independent evolution in every island\n"
-            "one generation: random pairing -> SBX -> Polynomial Mutation\n"
-            "evaluation -> phase-specific local survival",
+            "Independent SBX + PM\nEvaluate\nTCH / Pareto survival",
+            accent=True,
         )
 
-        with independent.subgraph() as phase_column:
-            phase_column.attr(rank="same")
-            phase_column.node("phase_check")
-            phase_column.node("aggregation")
-            phase_column.node("pareto")
-        with independent.subgraph() as evolution_column:
-            evolution_column.attr(rank="same")
-            evolution_column.node("define_islands")
-            evolution_column.node("expand")
-            evolution_column.node("island_bank")
-            evolution_column.node("local_evolution")
-
+        independent.edge("phase", "build_islands", style="invis", weight="5")
+        independent.edge("build_islands", "island_bank")
+        independent.edge("island_bank", "local_evolution")
         independent.edge(
-            "phase_check",
-            "aggregation",
+            "phase",
+            "local_evolution",
             style="dotted",
             color=MID_GRAY,
+            fontcolor=MID_GRAY,
             constraint="false",
         )
-        independent.edge(
-            "phase_check",
-            "pareto",
-            style="dotted",
-            color=MID_GRAY,
-            constraint="false",
-        )
-        independent.edge(
-            "aggregation",
-            "define_islands",
-            style="dotted",
-            color=MID_GRAY,
-        )
-        independent.edge(
-            "pareto",
-            "define_islands",
-            style="dotted",
-            color=MID_GRAY,
-        )
-        independent.edge("define_islands", "expand", constraint="false")
-        independent.edge("expand", "island_bank", constraint="false")
-        independent.edge("island_bank", "local_evolution", constraint="false")
 
     with graph.subgraph(name="cluster_combination") as combination:
-        combination.attr(
-            label="2  CROSS-ISLAND EXTREMA COMBINATION",
-            labelloc="t",
-            labeljust="l",
-            fontname="Helvetica-Bold",
-            fontsize="10",
+        add_cluster_title(
+            combination,
+            "2  CROSS-ISLAND\nEXTREMA\nCOMBINATION",
             color=MID_GRAY,
-            penwidth="1.2",
             style="rounded,dashed",
-            margin="10",
         )
-        add_process(
-            combination,
-            "extract_extrema",
-            "Extract one local extremum per island\n"
-            "minimum weighted Tchebycheff score",
-        )
-        add_process(
-            combination,
-            "direction_pairing",
-            "Pair extrema from least-similar\n"
-            "normalized weight directions\n"
-            "up to 2 partners per extremum",
-        )
+        add_process(combination, "extrema", "One weighted\nextremum per island")
+        add_process(combination, "pairing", "Least-similar direction\npairing")
         add_process(
             combination,
             "combination_offspring",
-            "Extrema Combination\n"
-            "SBX + Polynomial Mutation + evaluation\n"
-            "phase budget: 1.0 (Aggregation) / 0.25 (Pareto)",
-        )
-        with combination.subgraph() as combination_column:
-            combination_column.attr(rank="same")
-            combination_column.node("extract_extrema")
-            combination_column.node("direction_pairing")
-            combination_column.node("combination_offspring")
-        combination.edge("extract_extrema", "direction_pairing", constraint="false")
-        combination.edge(
-            "direction_pairing",
-            "combination_offspring",
-            constraint="false",
+            "SBX + PM + evaluation\nQ_c; budget 1.0 / 0.25",
+            accent=True,
         )
 
+        combination.edge("extrema", "pairing")
+        combination.edge("pairing", "combination_offspring")
+
     with graph.subgraph(name="cluster_global") as global_selection:
-        global_selection.attr(
-            label="3  GLOBAL REFERENCE-DIRECTION ENVIRONMENTAL SELECTION",
-            labelloc="t",
-            labeljust="l",
-            fontname="Helvetica-Bold",
-            fontsize="10",
+        add_cluster_title(
+            global_selection,
+            "3  GLOBAL\nREFERENCE-DIRECTION\nSELECTION",
             color=BLUE_BORDER,
-            penwidth="1.5",
             style="rounded",
-            margin="10",
         )
         add_process(
             global_selection,
             "merge",
-            "Merge candidate solutions\n"
-            "A + P_o + all island populations\n"
-            "+ extrema-combination offspring",
+            "Merge\nA + P_o\n+ islands + Q_c",
         )
         add_process(
             global_selection,
             "archive_selection",
-            "NSGA-III ReferenceDirectionSurvival\n"
-            "A <- global candidate pool (size N)",
+            "NSGA-III survival\nA <- select N",
             accent=True,
         )
         add_process(
             global_selection,
             "origin_selection",
-            "NSGA-III ReferenceDirectionSurvival\n"
-            "P_o <- select origin from A\n"
-            "|P_o| = min(N, max(20, ceil(0.2N)))",
+            "NSGA-III survival\nP_o <- select origins",
             accent=True,
         )
         global_selection.node(
             "termination",
-            "MaxFEs reached?\nNO: next outer iteration",
+            "MaxFEs\nreached?",
             shape="diamond",
             style="filled",
             fillcolor="white",
             color=DARK,
-            margin="0.03",
+            margin="0.02",
         )
         add_process(
             global_selection,
             "final_population",
-            "YES - Final reference-direction selection\nReturn final population",
+            "Final NSGA-III survival\nReturn population",
         )
-        with global_selection.subgraph() as global_column:
-            global_column.attr(rank="same")
-            global_column.node("merge")
-            global_column.node("archive_selection")
-            global_column.node("origin_selection")
-            global_column.node("termination")
-            global_column.node("final_population")
-        global_selection.edge("merge", "archive_selection", constraint="false")
-        global_selection.edge(
-            "archive_selection",
-            "origin_selection",
-            constraint="false",
-        )
-        global_selection.edge("origin_selection", "termination", constraint="false")
-        global_selection.edge("termination", "final_population", constraint="false")
 
-    with graph.subgraph() as initialization_column:
-        initialization_column.attr(rank="same")
-        initialization_column.node("start")
-        initialization_column.node("initialize")
+        global_selection.edge("merge", "archive_selection")
+        global_selection.edge("archive_selection", "origin_selection")
+        global_selection.edge("origin_selection", "termination")
+        global_selection.edge(
+            "termination",
+            "final_population",
+            xlabel="YES",
+            minlen="2",
+        )
+
+    graph.edge("start", "initialize")
+    with graph.subgraph() as entry_row:
+        entry_row.attr(rank="same")
+        entry_row.node("initialize")
+        entry_row.node("build_islands")
+        entry_row.node("extrema")
+        entry_row.node("merge")
+    graph.edge("initialize", "build_islands", constraint="false")
     graph.edge(
-        "start",
-        "initialize",
-        style="dotted",
-        color=MID_GRAY,
-        constraint="false",
-    )
-    graph.edge(
-        "initialize",
-        "define_islands",
-        constraint="false",
-    )
-    graph.edge(
-        "initialize",
-        "phase_check",
-        style="dotted",
-        color=MID_GRAY,
-        constraint="false",
-    )
-    graph.edge(
-        "local_evolution",
-        "extract_extrema",
-    )
-    graph.edge("local_evolution", "merge", constraint="false")
-    graph.edge(
+        "phase",
         "combination_offspring",
-        "merge",
+        style="dotted",
+        color=MID_GRAY,
+        fontcolor=MID_GRAY,
+        constraint="false",
     )
+    graph.edge("local_evolution", "extrema")
+    graph.edge("local_evolution", "merge", constraint="false")
+    graph.edge("combination_offspring", "merge")
     graph.edge(
         "termination",
-        "phase_check",
+        "build_islands",
+        xlabel="NO",
         style="dashed",
         color=BLUE_BORDER,
         fontcolor=BLUE_BORDER,
@@ -342,12 +241,11 @@ def build_graph(dpi: float = 72.45) -> Digraph:
     )
 
     graph.attr(
-        label="LEGEND   solid arrow: candidate-solution flow   |   "
-        "dotted arrow: phase/control signal   |   "
-        "dashed arrow: outer-loop feedback",
+        label="LEGEND   solid: candidate flow   |   dotted: phase control   |   "
+        "dashed: outer-loop feedback",
         labelloc="b",
         labeljust="c",
-        fontsize="8.5",
+        fontsize="9",
         fontcolor=MID_GRAY,
     )
     return graph

@@ -98,6 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixed-island-definitions", action="store_true")
     parser.add_argument("--origin-ratio", type=float, default=0.2)
     parser.add_argument("--island-population", type=int, default=20)
+    parser.add_argument(
+        "--island-initialization",
+        choices=["multi_ancestor", "single_ancestor"],
+        default="multi_ancestor",
+        help="S1 多祖先建岛或 S0 单祖先变异扩岛",
+    )
+    parser.add_argument("--direction-neighbor-ancestors", type=int, default=4)
+    parser.add_argument("--diverse-ancestors", type=int, default=2)
     parser.add_argument("--inner-generations-early", type=int, default=1)
     parser.add_argument("--inner-generations-late", type=int, default=1)
     parser.add_argument("--partners-per-elite", type=int, default=2)
@@ -117,6 +125,9 @@ def resolve_cases(args) -> list[ExperimentCase]:
     iemoec = IEMOECConfig(
         origin_ratio=args.origin_ratio,
         island_population=args.island_population,
+        island_initialization=args.island_initialization,
+        direction_neighbor_ancestors=args.direction_neighbor_ancestors,
+        diverse_ancestors=args.diverse_ancestors,
         inner_generations_early=args.inner_generations_early,
         inner_generations_late=args.inner_generations_late,
         partners_per_elite=args.partners_per_elite,

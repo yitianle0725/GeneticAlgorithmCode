@@ -80,12 +80,17 @@ python scripts/run.py --preset custom `
 - `--retain-island-state`：跨外循环继续演化已有岛种群，供消融实验使用。
 - `--fixed-island-definitions`：固定岛权重但仍逐轮重建，用作状态保留的严格对照。
 - `--origin-ratio`：起源种群占共同种群的比例，默认为 0.2。
+- `--island-initialization`：`multi_ancestor`（S1，默认）或 `single_ancestor`（S0 消融）。
+- `--direction-neighbor-ancestors`：每个岛优先注入的方向邻近解数量，默认为 4。
+- `--diverse-ancestors`：每个岛注入的决策空间差异解数量，默认为 2。
 - `--inner-generations-early`：前期每轮岛内演化代数，默认为 1。
 - `--inner-generations-late`：后期每轮岛内演化代数，默认为 1。
 
 IEMOEC 默认采用 G1/1，使每轮岛内演化后立即进行全局更新。可用上述两个参数复现实验旧配置 G3/5。
-默认每轮从最新 origin 重建岛种群，不保留上一轮岛状态。保留状态会固定岛身份，适合通过
-`--retain-island-state` 复现实验消融，但不作为推荐配置。
+默认每轮从最新全局候选池选择已评价的方向精英、方向邻近解和决策空间差异解，周期性重建
+多祖先岛，建岛本身不消耗 FE。保留状态会固定岛身份，适合通过 `--retain-island-state`
+复现实验消融，但不作为推荐配置。旧的单祖先 PM 扩岛可通过
+`--island-initialization single_ancestor` 作为 S0 对照复现。
 起源种群比例推荐保持 0.2；更大的比例可用 `--origin-ratio` 进行消融实验。
 重组预算推荐前期使用 1.0、Pareto 阶段使用 0.25；若要使用恒定比例，应同时设置两个重组参数。
 
@@ -106,7 +111,7 @@ results/my_pilot/
   failures.json
 ```
 
-其中 `history.csv` 的 `fe` 是所有算法共享的固定检查点，`observed_fe` 是批量评价跨过检查点时的实际 FE。IEMOEC 的公共检查点使用最近一次完成全局筛选后的 archive，不再记录正在演化的单个岛；最终行一定使用最终返回种群。IEMOEC 还会输出 `iemoec_diagnostics.csv`，记录每轮岛内 FE、重组后代数和外层筛选指标。`metrics.json` 记录最终 IGD+、GD、HV、Spacing、ONVG、第一前沿比例、运行时间和实际 FE。
+其中 `history.csv` 的 `fe` 是所有算法共享的固定检查点，`observed_fe` 是批量评价跨过检查点时的实际 FE。IEMOEC 的公共检查点使用最近一次完成全局筛选后的 archive，不再记录正在演化的单个岛；最终行一定使用最终返回种群。IEMOEC 还会输出 `iemoec_diagnostics.csv`，记录每轮建岛来源规模、岛内 FE、重组后代数和外层筛选指标。`metrics.json` 记录最终 IGD+、GD+、HV、pymoo Spacing、ONVG、第一前沿比例、运行时间和实际 FE。
 
 ## 汇总、统计与作图
 

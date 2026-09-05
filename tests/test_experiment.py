@@ -123,6 +123,15 @@ class RunnerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "origin_ratio"):
                     IEMOECConfig(origin_ratio=origin_ratio).validate()
 
+    def test_iemoec_rejects_invalid_island_initialization(self):
+        with self.assertRaisesRegex(ValueError, "island_initialization"):
+            IEMOECConfig(island_initialization="unknown").validate()
+
+        for field_name in ("direction_neighbor_ancestors", "diverse_ancestors"):
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, "多祖先数量"):
+                    IEMOECConfig(**{field_name: -1}).validate()
+
     def test_iemoec_rejects_invalid_recombination_ratio(self):
         invalid_configs = (
             {"recombination_budget_ratio": -0.01},
@@ -142,6 +151,9 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(config.origin_ratio, 0.2)
         self.assertEqual(config.recombination_budget_ratio, 1.0)
         self.assertEqual(config.late_recombination_budget_ratio, 0.25)
+        self.assertEqual(config.island_initialization, "multi_ancestor")
+        self.assertEqual(config.direction_neighbor_ancestors, 4)
+        self.assertEqual(config.diverse_ancestors, 2)
         self.assertFalse(config.retain_island_state)
 
     def case(self, algorithm: str, seed: int = 7):
@@ -185,6 +197,8 @@ class RunnerTests(unittest.TestCase):
 
             if algorithm == "IEMOEC":
                 self.assertEqual(result["origin_population_size"], 20)
+                self.assertEqual(result["island_initialization"], "multi_ancestor")
+                self.assertEqual(result["island_expansion_fes_total"], 0)
                 later_checkpoints = [
                     row for row in checkpoints if int(row["fe"]) > 91
                 ]
@@ -249,6 +263,7 @@ class RunnerTests(unittest.TestCase):
     def test_iemoec_can_retain_island_state_between_outer_iterations(self):
         config = IEMOECConfig(
             island_population=4,
+            island_initialization="single_ancestor",
             retain_island_state=True,
         )
         case = ExperimentCase(
@@ -272,6 +287,32 @@ class RunnerTests(unittest.TestCase):
             result["island_expansion_fes_total"],
             int(diagnostics[0]["expansion_fes"]),
         )
+
+    def test_multi_ancestor_islands_rebuild_from_evaluated_global_pool(self):
+        case = ExperimentCase(
+            "IEMOEC", "dtlz2", 3, 19, 364,
+            output_root=self.output,
+            history_points=3,
+            reference_points=30,
+            iemoec=self.small_iemoec,
+        )
+        result = run_case(case, force=True)
+        with (case.output_dir / "iemoec_diagnostics.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as handle:
+            diagnostics = list(csv.DictReader(handle))
+
+        self.assertGreater(len(diagnostics), 1)
+        self.assertEqual(result["island_expansion_fes_total"], 0)
+        self.assertTrue(
+            all(row["island_initialization"] == "multi_ancestor" for row in diagnostics)
+        )
+        source_sizes = [
+            int(row["island_source_population_size"]) for row in diagnostics
+        ]
+        self.assertEqual(source_sizes[0], 20)
+        self.assertEqual(source_sizes, sorted(source_sizes))
+        self.assertEqual(source_sizes[-1], 91)
 
     def test_iemoec_recombination_obeys_ratio_budget(self):
         config = IEMOECConfig(
