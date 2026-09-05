@@ -320,7 +320,9 @@ class IEMOECRunner:
             if self.on_outer_selection is not None:
                 event_metrics = self.on_outer_selection(self.n_eval, self.origin)
                 if event_metrics:
-                    for name in ("igd_plus", "gd", "hv", "spacing", "onvg", "nd_ratio"):
+                    for name in (
+                        "igd_plus", "gd_plus", "hv", "spacing", "onvg", "nd_ratio"
+                    ):
                         if name in event_metrics:
                             record[name] = event_metrics[name]
             self.outer_records.append(record)

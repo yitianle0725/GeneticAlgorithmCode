@@ -13,7 +13,7 @@ from pymoo.optimize import minimize
 from .config import ALGORITHM_LABELS, ExperimentCase
 from .factory import make_baseline
 from .iemoec import IEMOECRunner
-from .metrics import MetricSuite
+from .metrics import METRIC_SCHEMA_VERSION, MetricSuite
 from .problems import make_problem
 
 
@@ -90,7 +90,7 @@ def _write_history(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         preferred = [
             "fe", "observed_fe", "runtime_seconds", "event", "population_size",
-            "igd_plus", "gd", "hv", "spacing", "onvg", "nd_ratio",
+            "igd_plus", "gd_plus", "hv", "spacing", "onvg", "nd_ratio",
         ]
         available = {key for row in rows for key in row}
         fieldnames = [key for key in preferred if key in available]
@@ -119,7 +119,13 @@ def _is_complete(case: ExperimentCase) -> bool:
         return False
     try:
         with config_path.open(encoding="utf-8") as handle:
-            return json.load(handle) == case.to_dict()
+            config_matches = json.load(handle) == case.to_dict()
+        with metrics_path.open(encoding="utf-8") as handle:
+            metrics = json.load(handle)
+        return (
+            config_matches
+            and metrics.get("metric_schema_version") == METRIC_SCHEMA_VERSION
+        )
     except (OSError, json.JSONDecodeError):
         return False
 
@@ -207,6 +213,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     final_values = suite.calculate(F, include_hv=True)
     history.finalize(n_eval, population, final_values)
     metrics = {
+        "metric_schema_version": METRIC_SCHEMA_VERSION,
         "algorithm": case.normalized_algorithm,
         "algorithm_label": ALGORITHM_LABELS[case.normalized_algorithm],
         "problem": case.normalized_problem,

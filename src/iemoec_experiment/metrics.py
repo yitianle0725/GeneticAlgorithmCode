@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
-from pymoo.indicators.gd import GD
+from pymoo.indicators.gd_plus import GDPlus
 from pymoo.indicators.hv import HV
 from pymoo.indicators.igd_plus import IGDPlus
+from pymoo.indicators.spacing import SpacingIndicator
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.ref_dirs import get_reference_directions
 
@@ -12,6 +13,8 @@ _REFERENCE_DATA_CACHE: dict[
     tuple,
     tuple[np.ndarray, np.ndarray, np.ndarray],
 ] = {}
+
+METRIC_SCHEMA_VERSION = 2
 
 
 def reference_data(
@@ -56,16 +59,6 @@ def nondominated(F: np.ndarray) -> np.ndarray:
     return np.asarray(F)[indices]
 
 
-def spacing(F: np.ndarray) -> float:
-    F = np.asarray(F, dtype=float)
-    if len(F) < 2:
-        return 0.0
-    distances = np.abs(F[:, None, :] - F[None, :, :]).sum(axis=2)
-    np.fill_diagonal(distances, np.inf)
-    nearest = distances.min(axis=1)
-    return float(np.std(nearest, ddof=1)) if len(nearest) > 1 else 0.0
-
-
 class MetricSuite:
     def __init__(self, problem, n_reference_points: int = 1000, hv_samples: int = 20000):
         self.ref_pf, self.ideal, self.nadir = reference_data(
@@ -73,7 +66,8 @@ class MetricSuite:
             n_reference_points,
         )
         self.igd_plus = IGDPlus(self.ref_pf)
-        self.gd = GD(self.ref_pf)
+        self.gd_plus = GDPlus(self.ref_pf)
+        self.spacing = SpacingIndicator()
         self.hv_method = "exact" if problem.n_obj <= 5 else "monte_carlo"
         self.hv = HV(ref_point=np.full(problem.n_obj, 1.1)) if problem.n_obj <= 5 else None
         self.hv_ref = 1.1
@@ -102,8 +96,10 @@ class MetricSuite:
         normalized_nd = normalize(nd, self.ideal, self.nadir)
         result: dict[str, float | int] = {
             "igd_plus": float(self.igd_plus(nd)),
-            "gd": float(self.gd(nd)),
-            "spacing": spacing(normalized_nd),
+            "gd_plus": float(self.gd_plus(nd)),
+            "spacing": (
+                float(self.spacing(normalized_nd)) if len(normalized_nd) >= 2 else 0.0
+            ),
             "onvg": int(len(nd)),
             "nd_ratio": float(len(nd) / max(1, len(F))),
         }

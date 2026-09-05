@@ -6,15 +6,21 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 from scipy.stats import friedmanchisquare, rankdata, wilcoxon
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-METRICS = ("igd_plus", "gd", "hv", "spacing", "nd_ratio", "runtime_seconds")
-LOWER_IS_BETTER = {"igd_plus", "gd", "spacing", "runtime_seconds"}
+from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
+
+
+METRICS = ("igd_plus", "gd_plus", "hv", "spacing", "nd_ratio", "runtime_seconds")
+LOWER_IS_BETTER = {"igd_plus", "gd_plus", "spacing", "runtime_seconds"}
 ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
@@ -28,6 +34,10 @@ def load_rows(root: Path) -> list[dict]:
     for path in root.rglob("metrics.json"):
         with path.open(encoding="utf-8") as handle:
             row = json.load(handle)
+        if row.get("metric_schema_version") != METRIC_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"{path} 使用旧指标定义；请重新运行对应实验以生成 GD+ 和 pymoo Spacing"
+            )
         row["path"] = str(path.parent)
         rows.append(row)
     return rows

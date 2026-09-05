@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from pymoo.indicators.gd_plus import GDPlus
+from pymoo.indicators.spacing import SpacingIndicator
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -52,6 +54,18 @@ class ProblemTests(unittest.TestCase):
 
 
 class MetricTests(unittest.TestCase):
+    def test_metrics_use_pymoo_gd_plus_and_spacing(self):
+        problem = make_problem("dtlz2", 3)
+        suite = MetricSuite(problem, n_reference_points=30, hv_samples=1000)
+        F = suite.ref_pf[:10] * 1.05
+
+        result = suite.calculate(F)
+        normalized = (F - suite.ideal) / np.maximum(suite.nadir - suite.ideal, 1e-12)
+
+        self.assertNotIn("gd", result)
+        self.assertAlmostEqual(result["gd_plus"], float(GDPlus(suite.ref_pf)(F)))
+        self.assertAlmostEqual(result["spacing"], float(SpacingIndicator()(normalized)))
+
     def test_high_dimensional_reference_cache_across_problem_instances(self):
         for problem_name in ("dtlz1", "dtlz2", "dtlz3", "dtlz4"):
             for n_obj in (5, 10):
@@ -147,6 +161,9 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result["reference_population_size"], 91)
             self.assertEqual(result["population_size"], 91)
             self.assertTrue(np.isfinite(result["igd_plus"]))
+            self.assertEqual(result["metric_schema_version"], 2)
+            self.assertIn("gd_plus", result)
+            self.assertNotIn("gd", result)
             with (case.output_dir / "history.csv").open(
                 encoding="utf-8-sig",
                 newline="",
