@@ -39,3 +39,8 @@ Thumbs.db
 
 # ── Jupyter ──
 .ipynb_checkpoints/
+
+
+# 本地文件
+pictures/
+docs/
