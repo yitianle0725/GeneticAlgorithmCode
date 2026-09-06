@@ -19,12 +19,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
 
 
-METRICS = ("igd_plus", "gd_plus", "hv", "spacing", "nd_ratio", "runtime_seconds")
+METRICS = (
+    "igd_plus", "gd_plus", "hv", "spacing", "direction_occupancy",
+    "nd_ratio", "runtime_seconds",
+)
 LOWER_IS_BETTER = {"igd_plus", "gd_plus", "spacing", "runtime_seconds"}
 ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
     "MOEAD": "MOEA/D-TCH",
+    "RVEA": "RVEA",
+    "AGEMOEA2": "AGE-MOEA2",
     "IEMOEC": "IEMOEC",
 }
 
@@ -57,6 +62,29 @@ def holm_adjust(p_values: list[float]) -> list[float]:
     return adjusted.tolist()
 
 
+def vargha_delaney_a12(
+    target: np.ndarray,
+    competitor: np.ndarray,
+    lower_is_better: bool,
+) -> float:
+    """返回目标算法优于竞争算法的概率，平局计 0.5。"""
+    differences = target[:, None] - competitor[None, :]
+    wins = differences < 0 if lower_is_better else differences > 0
+    ties = differences == 0
+    return float((np.sum(wins) + 0.5 * np.sum(ties)) / differences.size)
+
+
+def a12_magnitude(value: float) -> str:
+    distance = abs(value - 0.5)
+    if distance < 0.06:
+        return "negligible"
+    if distance < 0.14:
+        return "small"
+    if distance < 0.21:
+        return "medium"
+    return "large"
+
+
 def write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
@@ -76,7 +104,10 @@ def summarize(rows: list[dict]) -> list[dict]:
             "problem": problem,
             "n_obj": n_obj,
             "algorithm": algorithm,
-            "algorithm_label": ALGORITHM_LABELS.get(algorithm, algorithm),
+            "algorithm_label": values[0].get(
+                "algorithm_label",
+                ALGORITHM_LABELS.get(algorithm, algorithm),
+            ),
             "n": len(values),
         }
         for metric in METRICS:
@@ -117,10 +148,18 @@ def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
                     "target_median": float(np.median(x)),
                     "competitor_median": float(np.median(y)),
                     "p_value": p_value,
+                    "a12_target_superiority": vargha_delaney_a12(
+                        x,
+                        y,
+                        metric in LOWER_IS_BETTER,
+                    ),
                 })
     adjusted = holm_adjust([test["p_value"] for test in tests])
     for test, p_adjusted in zip(tests, adjusted):
         test["p_holm"] = p_adjusted
+        test["a12_magnitude"] = a12_magnitude(
+            test["a12_target_superiority"]
+        )
         if p_adjusted >= alpha:
             symbol = "="
         else:

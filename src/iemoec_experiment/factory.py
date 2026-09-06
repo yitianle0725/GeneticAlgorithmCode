@@ -17,22 +17,22 @@ def reference_directions(case: ExperimentCase):
     return get_reference_directions("das-dennis", case.n_obj, n_partitions=partitions)
 
 
-def make_operators():
+def make_operators(initial_X=None):
     return {
-        "sampling": FloatRandomSampling(),
+        "sampling": initial_X.copy() if initial_X is not None else FloatRandomSampling(),
         "crossover": SBX(prob=1.0, eta=30),
         "mutation": PM(prob=1.0, prob_var=None, eta=20),
     }
 
 
-def make_baseline(case: ExperimentCase):
+def make_baseline(case: ExperimentCase, initial_X=None):
     """构造共享种群规模、参考方向和变异参数的 pymoo baseline。"""
     algorithm = case.normalized_algorithm
     if algorithm == "IEMOEC":
         raise ValueError("IEMOEC 由自定义 runner 创建")
     ref_dirs = reference_directions(case)
     pop_size = len(ref_dirs)
-    operators = make_operators()
+    operators = make_operators(initial_X)
     if algorithm == "NSGA2":
         return NSGA2(pop_size=pop_size, **operators), pop_size, ref_dirs
     if algorithm == "NSGA3":
@@ -49,4 +49,20 @@ def make_baseline(case: ExperimentCase):
             pop_size,
             ref_dirs,
         )
+    if algorithm == "RVEA":
+        from pymoo.algorithms.moo.rvea import RVEA
+
+        return (
+            RVEA(ref_dirs=ref_dirs, pop_size=pop_size, **operators),
+            pop_size,
+            ref_dirs,
+        )
+    if algorithm == "AGEMOEA2":
+        try:
+            from pymoo.algorithms.moo.age2 import AGEMOEA2
+        except Exception as exc:
+            raise RuntimeError(
+                "AGE-MOEA2 需要可选依赖 numba；请先执行 pip install numba"
+            ) from exc
+        return AGEMOEA2(pop_size=pop_size, **operators), pop_size, ref_dirs
     raise ValueError(f"未知 baseline: {algorithm}")

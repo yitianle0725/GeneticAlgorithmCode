@@ -38,6 +38,25 @@ class ConvexDTLZ2(Problem):
         return np.ones(self.n_obj)
 
 
+def standard_problem_dimensions(name: str, n_obj: int) -> tuple[int, int, int | None]:
+    """返回标准 n_var、k，以及仅 WFG 使用的 l。"""
+    normalized = name.lower().replace("-", "")
+    if normalized == "dtlz1":
+        k = 5
+        return n_obj + k - 1, k, None
+    if normalized == "dtlz7":
+        k = 20
+        return n_obj + k - 1, k, None
+    if normalized.startswith("dtlz"):
+        k = 10
+        return n_obj + k - 1, k, None
+    if normalized.startswith("wfg"):
+        k = 2 * (n_obj - 1)
+        l = 20
+        return k + l, k, l
+    raise ValueError(f"{name} 不是 DTLZ/WFG 问题")
+
+
 def make_problem(name: str, n_obj: int, n_var: int | None = None) -> Problem:
     """只对旧 C-DTLZ2 保留薄包装，其余问题直接交给 pymoo。"""
     normalized = name.lower().replace("-", "")
@@ -52,17 +71,12 @@ def make_problem(name: str, n_obj: int, n_var: int | None = None) -> Problem:
         return get_problem(normalized, **kwargs)
     if normalized.startswith("dtlz"):
         if n_var is None:
-            if normalized == "dtlz1":
-                n_var = n_obj + 4   # 标准 k=5
-            elif normalized == "dtlz7":
-                n_var = n_obj + 19  # 标准 k=20
-            else:
-                n_var = n_obj + 9   # 标准 k=10
+            n_var, _, _ = standard_problem_dimensions(normalized, n_obj)
         return get_problem(normalized, n_var=n_var, n_obj=n_obj)
 
     # WFG 要求 k 可被 M-1 整除；2(M-1) 是 pymoo 示例中的稳定选择。
-    k = 2 * (n_obj - 1)
-    resolved_n_var = n_var or (k + 20)
+    standard_n_var, k, _ = standard_problem_dimensions(normalized, n_obj)
+    resolved_n_var = n_var or standard_n_var
     if resolved_n_var <= k:
         raise ValueError(f"WFG 的 n_var 必须大于 k={k}")
     return get_problem(normalized, n_var=resolved_n_var, n_obj=n_obj, k=k)

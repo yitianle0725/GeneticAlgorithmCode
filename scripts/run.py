@@ -16,6 +16,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from iemoec_experiment.config import (  # noqa: E402
+    DEFAULT_ALGORITHMS,
     ExperimentCase,
     IEMOECConfig,
     SUPPORTED_ALGORITHMS,
@@ -33,6 +34,15 @@ PRESETS = {
     },
     "pilot": {
         "problems": ["dtlz1", "dtlz2", "dtlz3", "dtlz4"],
+        "objectives": [3, 5, 10],
+        "seeds": list(range(1, 6)),
+        "evals_per_pop": 200,
+    },
+    "structure": {
+        "problems": [
+            "dtlz2", "dtlz3", "dtlz4", "dtlz7",
+            "wfg1", "wfg2", "wfg4", "wfg9",
+        ],
         "objectives": [3, 5, 10],
         "seeds": list(range(1, 6)),
         "evals_per_pop": 200,
@@ -72,8 +82,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="基于 pymoo 的 NSGA-II/III、MOEA/D 与 IEMOEC 公平对比实验",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--preset", choices=["smoke", "pilot", "formal", "custom"], default="smoke")
-    parser.add_argument("--algorithms", nargs="+", choices=SUPPORTED_ALGORITHMS, default=list(SUPPORTED_ALGORITHMS))
+    parser.add_argument(
+        "--preset",
+        choices=["smoke", "pilot", "structure", "formal", "custom"],
+        default="smoke",
+    )
+    parser.add_argument(
+        "--algorithms",
+        nargs="+",
+        choices=SUPPORTED_ALGORITHMS,
+        default=list(DEFAULT_ALGORITHMS),
+    )
     parser.add_argument("--problems", nargs="+", help="例如 dtlz2 wfg1")
     parser.add_argument("--objectives", type=parse_int_set, help="例如 3,5,8,10,15")
     parser.add_argument("--seeds", type=parse_int_set, help="例如 1-5 或 1,3,7")
@@ -87,9 +106,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--history-hv", action="store_true", help="在检查点计算 HV（高维实验不建议）")
     parser.add_argument("--reference-points", type=int, default=1000)
     parser.add_argument("--high-dim-hv-samples", type=int, default=20000)
-    parser.add_argument("--force", action="store_true", help="覆盖相同目录中的已有结果")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="重新运行完全相同的配置；不同配置仍须更换 run-name",
+    )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--iemoec-survival", choices=["nsga3", "rank"], default="nsga3")
+    parser.add_argument("--iemoec-variant", choices=["v0", "s1", "candidate"], default="s1")
+    parser.add_argument(
+        "--iemoec-survival",
+        choices=["nsga3", "rank", "rank_crowding"],
+        default="nsga3",
+    )
     parser.add_argument("--iemoec-crowding", action="store_true")
     parser.add_argument("--no-recombination", action="store_true")
     parser.add_argument("--recombination-budget-ratio", type=float, default=1.0)
@@ -101,11 +129,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--island-initialization",
         choices=["multi_ancestor", "single_ancestor"],
-        default="multi_ancestor",
-        help="S1 多祖先建岛或 S0 单祖先变异扩岛",
+        default=None,
+        help="S1 多祖先建岛或 V0 单祖先变异扩岛",
     )
-    parser.add_argument("--direction-neighbor-ancestors", type=int, default=4)
-    parser.add_argument("--diverse-ancestors", type=int, default=2)
+    parser.add_argument("--direction-neighbor-ancestors", type=int)
+    parser.add_argument("--diverse-ancestors", type=int)
+    parser.add_argument(
+        "--island-direction-mode",
+        choices=["axis_random", "reference_subset"],
+    )
+    parser.add_argument("--island-count-multiplier", type=int, choices=[2, 4])
+    parser.add_argument("--outer-batch-ratio", type=float)
+    parser.add_argument("--local-fe-ratio", type=float)
+    parser.add_argument("--recombination-fe-ratio", type=float)
+    parser.add_argument(
+        "--pairing-strategy",
+        choices=[
+            "farthest_weight", "nearest_weight", "random",
+            "farthest_decision", "none",
+        ],
+    )
     parser.add_argument("--inner-generations-early", type=int, default=1)
     parser.add_argument("--inner-generations-late", type=int, default=1)
     parser.add_argument("--partners-per-elite", type=int, default=2)
@@ -120,25 +163,51 @@ def resolve_cases(args) -> list[ExperimentCase]:
     evals_per_pop = args.evals_per_pop or preset.get("evals_per_pop", 200)
     if not problems or not objectives or not seeds:
         raise ValueError("custom 模式必须提供 --problems、--objectives 和 --seeds")
-    run_name = args.run_name or args.preset
+    run_name = args.run_name or f"{args.preset}_{args.iemoec_variant}"
     output_root = str(Path(args.output_root) / run_name)
-    iemoec = IEMOECConfig(
-        origin_ratio=args.origin_ratio,
-        island_population=args.island_population,
-        island_initialization=args.island_initialization,
-        direction_neighbor_ancestors=args.direction_neighbor_ancestors,
-        diverse_ancestors=args.diverse_ancestors,
-        inner_generations_early=args.inner_generations_early,
-        inner_generations_late=args.inner_generations_late,
-        partners_per_elite=args.partners_per_elite,
-        outer_survival=args.iemoec_survival,
-        use_crowding=args.iemoec_crowding,
-        enable_recombination=not args.no_recombination,
-        recombination_budget_ratio=args.recombination_budget_ratio,
-        late_recombination_budget_ratio=args.late_recombination_budget_ratio,
-        retain_island_state=args.retain_island_state,
-        fixed_island_definitions=args.fixed_island_definitions,
-    )
+    overrides = {
+        "origin_ratio": args.origin_ratio,
+        "island_population": args.island_population,
+        "inner_generations_early": args.inner_generations_early,
+        "inner_generations_late": args.inner_generations_late,
+        "partners_per_elite": args.partners_per_elite,
+        "outer_survival": args.iemoec_survival,
+        "use_crowding": args.iemoec_crowding,
+        "enable_recombination": not args.no_recombination,
+        "recombination_budget_ratio": args.recombination_budget_ratio,
+        "late_recombination_budget_ratio": args.late_recombination_budget_ratio,
+        "retain_island_state": args.retain_island_state,
+        "fixed_island_definitions": args.fixed_island_definitions,
+    }
+    optional = {
+        "island_initialization": args.island_initialization,
+        "direction_neighbor_ancestors": args.direction_neighbor_ancestors,
+        "diverse_ancestors": args.diverse_ancestors,
+        "island_direction_mode": args.island_direction_mode,
+        "island_count_multiplier": args.island_count_multiplier,
+        "outer_batch_ratio": args.outer_batch_ratio,
+        "local_fe_ratio": args.local_fe_ratio,
+        "recombination_fe_ratio": args.recombination_fe_ratio,
+        "pairing_strategy": args.pairing_strategy,
+    }
+    overrides.update({key: value for key, value in optional.items() if value is not None})
+    if args.no_recombination and args.iemoec_variant == "candidate":
+        overrides.update({
+            "pairing_strategy": "none",
+            "local_fe_ratio": 1.0,
+            "recombination_fe_ratio": 0.0,
+        })
+    elif (
+        args.iemoec_variant == "candidate"
+        and args.pairing_strategy == "none"
+        and args.local_fe_ratio is None
+        and args.recombination_fe_ratio is None
+    ):
+        overrides.update({
+            "local_fe_ratio": 1.0,
+            "recombination_fe_ratio": 0.0,
+        })
+    iemoec = IEMOECConfig.for_variant(args.iemoec_variant, **overrides)
     cases = []
     for problem in problems:
         for n_obj in objectives:
@@ -178,7 +247,9 @@ def main() -> int:
     for case in cases[:8]:
         print(
             f"  {case.normalized_algorithm:7s} {case.normalized_problem.upper():8s} "
-            f"M={case.n_obj:2d} seed={case.seed:03d} MaxFEs={case.max_fes}"
+            f"M={case.n_obj:2d} seed={case.seed:03d} MaxFEs={case.max_fes} "
+            f"variant={case.algorithm_variant} schema={case.algorithm_schema_version} "
+            f"label={case.algorithm_label}"
         )
     if len(cases) > 8:
         print(f"  ... 其余 {len(cases) - 8} 个任务")

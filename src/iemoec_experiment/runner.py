@@ -10,9 +10,10 @@ import numpy as np
 from pymoo.core.callback import Callback
 from pymoo.optimize import minimize
 
-from .config import ALGORITHM_LABELS, ExperimentCase
-from .factory import make_baseline
+from .config import ExperimentCase
+from .factory import make_baseline, reference_directions
 from .iemoec import IEMOECRunner
+from .initialization import initialization_hash, shared_initial_decisions
 from .metrics import METRIC_SCHEMA_VERSION, MetricSuite
 from .problems import make_problem
 
@@ -90,7 +91,8 @@ def _write_history(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         preferred = [
             "fe", "observed_fe", "runtime_seconds", "event", "population_size",
-            "igd_plus", "gd_plus", "hv", "spacing", "onvg", "nd_ratio",
+            "igd_plus", "gd_plus", "hv", "spacing", "direction_occupancy",
+            "onvg", "nd_ratio",
         ]
         available = {key for row in rows for key in row}
         fieldnames = [key for key in preferred if key in available]
@@ -106,10 +108,17 @@ def _write_population(path: Path, population) -> None:
     columns = [f"x{i + 1}" for i in range(X.shape[1])] + [
         f"f{i + 1}" for i in range(F.shape[1])
     ]
+    provenance = population.get("provenance")
+    if provenance is not None:
+        columns.append("provenance")
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
-        writer.writerows(np.hstack([X, F]))
+        for index, values in enumerate(np.hstack([X, F])):
+            row = values.tolist()
+            if provenance is not None:
+                row.append(provenance[index])
+            writer.writerow(row)
 
 
 def _is_complete(case: ExperimentCase) -> bool:
@@ -138,19 +147,36 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     output_dir = case.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     config_path = output_dir / "config.json"
-    if config_path.exists() and not force:
+    if config_path.exists():
         try:
             with config_path.open(encoding="utf-8") as handle:
                 previous = json.load(handle)
         except (OSError, json.JSONDecodeError):
             previous = None
+        previous_schema = (
+            previous.get("algorithm_schema_version")
+            if isinstance(previous, dict)
+            else None
+        )
+        if previous_schema != case.algorithm_schema_version:
+            raise RuntimeError(
+                f"{output_dir} 已有不同 algorithm schema；禁止覆盖，请更换 --run-name"
+            )
         if previous != case.to_dict():
             raise RuntimeError(
-                f"{output_dir} 已有不同配置；请更换 --run-name 或显式使用 --force"
+                f"{output_dir} 已有不同配置；禁止混写，请更换 --run-name"
             )
     _json_dump(config_path, case.to_dict())
     problem = make_problem(case.normalized_problem, case.n_obj, case.n_var)
-    suite = MetricSuite(problem, case.reference_points, case.high_dim_hv_samples)
+    pop_size = len(reference_directions(case))
+    initial_X = shared_initial_decisions(problem, pop_size, case.seed)
+    initial_hash = initialization_hash(initial_X)
+    suite = MetricSuite(
+        problem,
+        case.reference_points,
+        case.high_dim_hv_samples,
+        direction_directions=reference_directions(case),
+    )
     history = HistoryRecorder(suite, case.max_fes, case.history_points, case.history_hv)
     started = time.perf_counter()
 
@@ -159,6 +185,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         algorithm = IEMOECRunner(
             problem,
             case,
+            initial_X=initial_X,
             on_checkpoint=lambda fe, pop: history.record(fe, pop),
             on_outer_selection=lambda fe, pop: history.record_event(
                 fe,
@@ -170,7 +197,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         n_eval = algorithm.n_eval
         pop_size = algorithm.pop_size
         extra["outer_iterations"] = outer_iterations
-        extra["global_selection_count"] = outer_iterations + 1
+        extra["global_selection_count"] = algorithm.global_selection_count
         extra["origin_population_size"] = algorithm.n_origin
         extra["island_initialization"] = case.iemoec.island_initialization
         extra["island_fes_total"] = int(
@@ -186,7 +213,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
             sum(row["recombination_offspring"] for row in algorithm.outer_records)
         )
     else:
-        algorithm, pop_size, _ = make_baseline(case)
+        algorithm, pop_size, _ = make_baseline(case, initial_X=initial_X)
         if case.max_fes < pop_size:
             raise ValueError(f"max_fes={case.max_fes} 小于种群大小 {pop_size}")
         if case.max_fes % pop_size != 0:
@@ -215,8 +242,10 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     history.finalize(n_eval, population, final_values)
     metrics = {
         "metric_schema_version": METRIC_SCHEMA_VERSION,
+        "algorithm_schema_version": case.algorithm_schema_version,
+        "algorithm_variant": case.algorithm_variant,
         "algorithm": case.normalized_algorithm,
-        "algorithm_label": ALGORITHM_LABELS[case.normalized_algorithm],
+        "algorithm_label": case.algorithm_label,
         "problem": case.normalized_problem,
         "n_obj": case.n_obj,
         "seed": case.seed,
@@ -226,6 +255,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         "reference_population_size": int(pop_size),
         "runtime_seconds": float(runtime),
         "hv_method": suite.hv_method,
+        "initialization_hash": initial_hash,
         **final_values,
         **extra,
     }

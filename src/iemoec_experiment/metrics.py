@@ -14,7 +14,7 @@ _REFERENCE_DATA_CACHE: dict[
     tuple[np.ndarray, np.ndarray, np.ndarray],
 ] = {}
 
-METRIC_SCHEMA_VERSION = 2
+METRIC_SCHEMA_VERSION = 3
 
 
 def reference_data(
@@ -60,7 +60,13 @@ def nondominated(F: np.ndarray) -> np.ndarray:
 
 
 class MetricSuite:
-    def __init__(self, problem, n_reference_points: int = 1000, hv_samples: int = 20000):
+    def __init__(
+        self,
+        problem,
+        n_reference_points: int = 1000,
+        hv_samples: int = 20000,
+        direction_directions: np.ndarray | None = None,
+    ):
         self.ref_pf, self.ideal, self.nadir = reference_data(
             problem,
             n_reference_points,
@@ -68,6 +74,11 @@ class MetricSuite:
         self.igd_plus = IGDPlus(self.ref_pf)
         self.gd_plus = GDPlus(self.ref_pf)
         self.spacing = SpacingIndicator()
+        self.direction_directions = (
+            None
+            if direction_directions is None
+            else np.asarray(direction_directions, dtype=float)
+        )
         self.hv_method = "exact" if problem.n_obj <= 5 else "monte_carlo"
         self.hv = HV(ref_point=np.full(problem.n_obj, 1.1)) if problem.n_obj <= 5 else None
         self.hv_ref = 1.1
@@ -103,6 +114,17 @@ class MetricSuite:
             "onvg": int(len(nd)),
             "nd_ratio": float(len(nd) / max(1, len(F))),
         }
+        if self.direction_directions is not None:
+            points = np.maximum(normalized_nd, 0.0)
+            points /= np.maximum(np.linalg.norm(points, axis=1, keepdims=True), 1e-12)
+            directions = self.direction_directions / np.maximum(
+                np.linalg.norm(self.direction_directions, axis=1, keepdims=True),
+                1e-12,
+            )
+            assigned = np.argmax(points @ directions.T, axis=1)
+            result["direction_occupancy"] = float(
+                len(np.unique(assigned)) / len(directions)
+            )
         if include_hv:
             result["hv"] = self._calculate_hv(normalized_nd)
         return result
