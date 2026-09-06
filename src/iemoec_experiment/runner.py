@@ -147,6 +147,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     output_dir = case.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     config_path = output_dir / "config.json"
+    metrics_path = output_dir / "metrics.json"
     if config_path.exists():
         try:
             with config_path.open(encoding="utf-8") as handle:
@@ -165,6 +166,19 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         if previous != case.to_dict():
             raise RuntimeError(
                 f"{output_dir} 已有不同配置；禁止混写，请更换 --run-name"
+            )
+    if metrics_path.exists():
+        try:
+            with metrics_path.open(encoding="utf-8") as handle:
+                previous_metric_schema = json.load(handle).get(
+                    "metric_schema_version"
+                )
+        except (OSError, json.JSONDecodeError, AttributeError):
+            previous_metric_schema = None
+        if previous_metric_schema != METRIC_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"{output_dir} 使用旧 metric schema；"
+                "为保持指标可比性，请更换 --run-name"
             )
     _json_dump(config_path, case.to_dict())
     problem = make_problem(case.normalized_problem, case.n_obj, case.n_var)
@@ -255,6 +269,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         "reference_population_size": int(pop_size),
         "runtime_seconds": float(runtime),
         "hv_method": suite.hv_method,
+        "reference_front_method": suite.reference_front_method,
         "initialization_hash": initial_hash,
         **final_values,
         **extra,

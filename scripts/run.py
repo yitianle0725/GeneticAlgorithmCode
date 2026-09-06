@@ -22,6 +22,7 @@ from iemoec_experiment.config import (  # noqa: E402
     SUPPORTED_ALGORITHMS,
 )
 from iemoec_experiment.factory import reference_directions  # noqa: E402
+from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
 from iemoec_experiment.runner import run_case  # noqa: E402
 
 
@@ -236,10 +237,28 @@ def resolve_cases(args) -> list[ExperimentCase]:
     return cases
 
 
+def ensure_metric_schema_isolated(cases: list[ExperimentCase]) -> None:
+    """整批启动前阻止新旧指标定义混入同一 run-name。"""
+    root = Path(cases[0].output_root)
+    schemas = set()
+    for path in root.rglob("metrics.json") if root.exists() else ():
+        try:
+            with path.open(encoding="utf-8") as handle:
+                schemas.add(json.load(handle).get("metric_schema_version"))
+        except (OSError, json.JSONDecodeError, AttributeError):
+            schemas.add(None)
+    if schemas and schemas != {METRIC_SCHEMA_VERSION}:
+        raise ValueError(
+            f"{root} 已包含 metric schema {sorted(str(value) for value in schemas)}；"
+            f"当前为 {METRIC_SCHEMA_VERSION}，请更换 --run-name"
+        )
+
+
 def main() -> int:
     args = build_parser().parse_args()
     try:
         cases = resolve_cases(args)
+        ensure_metric_schema_isolated(cases)
     except ValueError as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2

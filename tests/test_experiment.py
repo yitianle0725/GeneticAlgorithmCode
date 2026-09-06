@@ -117,6 +117,17 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(suite_a.hv_method, "monte_carlo")
         self.assertEqual(suite_a.calculate(F)["hv"], suite_b.calculate(F)["hv"])
 
+    def test_dtlz7_and_wfg_reference_fronts_are_bounded_and_reproducible(self):
+        for problem_name in ("dtlz7", "wfg1", "wfg2", "wfg4", "wfg9"):
+            for n_obj in (3, 5, 10):
+                problem_a = make_problem(problem_name, n_obj)
+                problem_b = make_problem(problem_name, n_obj)
+                suite_a = MetricSuite(problem_a, n_reference_points=100, hv_samples=1000)
+                suite_b = MetricSuite(problem_b, n_reference_points=100, hv_samples=1000)
+
+                self.assertLessEqual(len(suite_a.ref_pf), 100)
+                np.testing.assert_allclose(suite_a.ref_pf, suite_b.ref_pf)
+
 
 class StructureHelperTests(unittest.TestCase):
     def test_objective_normalization_is_scale_invariant(self):
@@ -269,7 +280,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result["reference_population_size"], 91)
             self.assertEqual(result["population_size"], 91)
             self.assertTrue(np.isfinite(result["igd_plus"]))
-            self.assertEqual(result["metric_schema_version"], 3)
+            self.assertEqual(result["metric_schema_version"], 4)
             self.assertIn("gd_plus", result)
             self.assertNotIn("gd", result)
             with (case.output_dir / "history.csv").open(
@@ -348,6 +359,19 @@ class RunnerTests(unittest.TestCase):
         run_case(v0, force=True)
         with self.assertRaisesRegex(RuntimeError, "algorithm schema"):
             run_case(candidate, force=True)
+
+    def test_different_metric_schema_requires_new_run_name(self):
+        case = self.case("NSGA2")
+        run_case(case, force=True)
+        metrics_path = case.output_dir / "metrics.json"
+        with metrics_path.open(encoding="utf-8") as handle:
+            metrics = json.load(handle)
+        metrics["metric_schema_version"] = 3
+        with metrics_path.open("w", encoding="utf-8") as handle:
+            json.dump(metrics, handle, ensure_ascii=False, indent=2)
+
+        with self.assertRaisesRegex(RuntimeError, "旧 metric schema"):
+            run_case(case, force=True)
 
     def test_common_initialization_matches_all_four_algorithms(self):
         hashes = []

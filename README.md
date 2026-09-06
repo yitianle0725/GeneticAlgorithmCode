@@ -115,6 +115,8 @@ ideal/nadir 归一化上下文，先按 X 去重，再执行一次可消融的�
 
 每个 `config.json` 都记录 `algorithm_schema_version`。不同 schema 不允许写入同一结果目录，
 即使指定 `--force` 也必须更换 `--run-name`。未显式指定 run-name 时，目录名自动包含 variant。
+`metrics.json` 另行记录 `metric_schema_version`；参考前沿或指标定义升级后也必须使用新的
+run-name，避免同一批结果混用不同指标口径。
 
 ## 输出结构
 
@@ -135,6 +137,8 @@ results/my_pilot/
 `final_population.csv` 保存决策、目标值和 provenance。candidate 的 `iemoec_diagnostics.csv` 还记录
 founder 多样性、合并唯一率、local/recombination 后代与存活率、方向覆盖率和每轮固定 FE 批次。
 主指标为 IGD+、HV，补充 GD+、pymoo Spacing、方向覆盖率和运行时间；历史默认不计算 HV。
+DTLZ7 与 WFG 使用固定随机状态的有界参考前沿生成，GD+/IGD+ 按批调用 pymoo 指标，避免
+高目标数或并行任务建立超大距离矩阵。
 
 ## 汇总、统计与作图
 
