@@ -6,7 +6,7 @@
 
 - NSGA-II、NSGA-III、MOEA/D-TCH、RVEA、AGE-MOEA2、DTLZ、WFG、SBX、多项式变异、非支配排序和质量指标直接使用 pymoo。
 - 四个算法在相同问题与目标数下共享种群规模，并严格使用相同 `MaxFEs`。
-- 每个 problem、目标数和 seed 使用同一份缓存 `X_init`；candidate 会先评价完整 N，再构造 origin。
+- 每个 problem、目标数和 seed 使用同一份缓存 `X_init`；candidate/S2 会先评价完整 N，再构造 origin。
 - 正式实验不使用 HV/IGD 早停，不提供 IEMOEC 专属的额外 PF 扩展。
 - 低维（M≤5）计算精确 HV；高维使用固定公共采样点的 Monte Carlo HV。
 - 运行时只在固定 FE 检查点记录历史；默认仅最终计算 HV。
@@ -52,7 +52,7 @@ python scripts/run.py --preset structure --iemoec-variant candidate --dry-run
 DTLZ1–4、WFG1/2/4/9、M=3/5/8/10/15、30 个种子：
 
 ```powershell
-python scripts/run.py --preset formal --workers 6
+python scripts/run.py --preset formal --iemoec-variant s2 --workers 4
 ```
 
 正式实验任务很多。建议先完成 smoke 和 pilot，确认参数后再启动。仅使用任务级并行，不要同时开启岛级多进程。
@@ -68,7 +68,7 @@ python scripts/run.py --preset custom `
   --objectives 3,5,10 `
   --seeds 1-5 `
   --evals-per-pop 200 `
-  --workers 6 `
+  --workers 4 `
   --run-name my_pilot
 ```
 
@@ -80,7 +80,7 @@ python scripts/run.py --preset custom `
 - `--force`：重新运行完全相同的配置；任何配置差异都必须更换 `--run-name`。
 - `--history-hv`：在历史检查点计算 HV；高维时不建议启用。
 - `--run-name`：固定结果批次名，用于断点续跑。
-- `--iemoec-variant`：选择 `v0`、`s1` 或 `candidate`，默认 `s1`。
+- `--iemoec-variant`：选择 `v0`、`s1`、`candidate` 或 `s2`；统一 CLI 默认 `s2`。
 - `--iemoec-survival`：选择 `rank`、`rank_crowding` 或 `nsga3`。
 - `--iemoec-crowding`：启用拥挤度，供消融实验使用。
 - `--no-recombination`：关闭跨岛组合，供消融实验使用。
@@ -93,9 +93,9 @@ python scripts/run.py --preset custom `
 - `--direction-neighbor-ancestors`：每个岛优先注入的方向邻近解数量，默认为 4。
 - `--diverse-ancestors`：每个岛注入的决策空间差异解数量，默认为 2。
 - `--island-direction-mode`：选择 `axis_random` 或 `reference_subset`。
-- `--island-count-multiplier`：构造 `2M` 或 `4M` 个岛；尚无实验支持 4M 最优。
+- `--island-count-multiplier`：构造 `2M` 或 `4M` 个岛；消融结果不支持将 4M 设为默认。
 - `--outer-batch-ratio`：固定外批次相对共同种群 N 的比例。
-- `--local-fe-ratio`、`--recombination-fe-ratio`：candidate 批次内 FE 分配，两者之和必须为 1。
+- `--local-fe-ratio`、`--recombination-fe-ratio`：candidate/S2 批次内 FE 分配，两者之和必须为 1。
 - `--pairing-strategy`：`farthest_weight`、`nearest_weight`、`random`、`farthest_decision` 或 `none`。
 - `--inner-generations-early`：前期每轮岛内演化代数，默认为 1。
 - `--inner-generations-late`：后期每轮岛内演化代数，默认为 1。
@@ -107,11 +107,15 @@ python scripts/run.py --preset custom `
 | `v0` | 0 | 仅评价小 origin | 单祖先 PM 扩岛 | axis/random、旧预算 | 旧双重选择 |
 | `s1` | 1 | 仅评价小 origin | 全局池多祖先、0 FE | axis/random、旧预算 | 旧双重选择 |
 | `candidate` | 2 | 评价公共完整 N | origin anchor + supporting founders | 参考方向子集、固定批次 | 每轮一次 survival |
+| `s2` | 3 | 评价公共完整 N | origin anchor + supporting founders | axis/random、2M、固定 N 批次 | 每轮一次 NSGA-III survival |
 
-默认 `s1` 保持已完成 pilot 使用的多祖先算法，不自动启用 candidate。candidate 每轮使用同一
+V0、S1 和 candidate 保留为复现实验入口；完成结构消融后，统一 CLI 默认使用 S2。candidate/S2 每轮使用同一
 ideal/nadir 归一化上下文，先按 X 去重，再执行一次可消融的外层 survival；origin 优先吸收
 存活的岛方向代表，再用非支配等级和拥挤度补齐。`rank`、`rank_crowding`、`nsga3` 的输出标签
 分别为 IEMOEC-Rank、IEMOEC-CD、IEMOEC-RD。
+
+S2 固定采用消融中更稳健的 `axis_random + 2M + NSGA-III RD + farthest_weight + 75/25 FE`
+组合。Rank、Rank-Crowding、4M、50/50 FE 和其他 pairing 仍保留为显式消融参数，不作为默认机制。
 
 每个 `config.json` 都记录 `algorithm_schema_version`。不同 schema 不允许写入同一结果目录，
 即使指定 `--force` 也必须更换 `--run-name`。未显式指定 run-name 时，目录名自动包含 variant。
@@ -134,7 +138,7 @@ results/my_pilot/
 ```
 
 其中 `history.csv` 的 `fe` 是公共固定检查点，最终行与 `metrics.json` 使用完全相同的最终 F。
-`final_population.csv` 保存决策、目标值和 provenance。candidate 的 `iemoec_diagnostics.csv` 还记录
+`final_population.csv` 保存决策、目标值和 provenance。candidate/S2 的 `iemoec_diagnostics.csv` 还记录
 founder 多样性、合并唯一率、local/recombination 后代与存活率、方向覆盖率和每轮固定 FE 批次。
 主指标为 IGD+、HV，补充 GD+、pymoo Spacing、方向覆盖率和运行时间；历史默认不计算 HV。
 DTLZ7 与 WFG 使用固定随机状态的有界参考前沿生成，GD+/IGD+ 按批调用 pymoo 指标，避免

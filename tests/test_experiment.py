@@ -243,12 +243,22 @@ class RunnerTests(unittest.TestCase):
         v0 = IEMOECConfig.for_variant("v0")
         s1 = IEMOECConfig.for_variant("s1")
         candidate = IEMOECConfig.for_variant("candidate")
+        s2 = IEMOECConfig.for_variant("s2")
         self.assertEqual(v0.island_initialization, "single_ancestor")
         self.assertEqual(s1.island_initialization, "multi_ancestor")
         self.assertEqual(candidate.initialization_mode, "shared_population")
         self.assertEqual(candidate.normalization_mode, "global")
         self.assertEqual(candidate.fe_scheduler, "fixed_batch")
         self.assertEqual(candidate.algorithm_schema_version, 2)
+        self.assertEqual(s2.algorithm_schema_version, 3)
+        self.assertTrue(s2.uses_candidate_architecture)
+        self.assertEqual(s2.island_direction_mode, "axis_random")
+        self.assertEqual(s2.island_count_multiplier, 2)
+        self.assertEqual(s2.outer_survival, "nsga3")
+        self.assertEqual(s2.pairing_strategy, "farthest_weight")
+        self.assertEqual(s2.local_fe_ratio, 0.75)
+        self.assertEqual(s2.recombination_fe_ratio, 0.25)
+        self.assertEqual(s2.outer_batch_ratio, 1.0)
 
         expected = {
             "rank": "IEMOEC-Rank",
@@ -517,6 +527,23 @@ class RunnerTests(unittest.TestCase):
             "direction_occupancy", "empty_direction_ratio",
         }
         self.assertTrue(required.issubset(diagnostics[0]))
+
+    def test_s2_uses_candidate_execution_path(self):
+        config = IEMOECConfig.for_variant("s2", island_population=4)
+        case = ExperimentCase(
+            "IEMOEC", "dtlz2", 3, 37, 182,
+            output_root=str(Path(self.output) / "s2"),
+            history_points=3,
+            reference_points=30,
+            iemoec=config,
+        )
+
+        result = run_case(case, force=True)
+
+        self.assertEqual(result["algorithm_variant"], "s2")
+        self.assertEqual(result["algorithm_schema_version"], 3)
+        self.assertEqual(result["n_eval"], 182)
+        self.assertEqual(result["global_selection_count"], 1)
 
     def test_candidate_founders_include_origin_anchor_without_evaluation(self):
         config = IEMOECConfig.for_variant("candidate", island_population=6)

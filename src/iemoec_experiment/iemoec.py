@@ -244,7 +244,7 @@ class IEMOECRunner:
 
         scores = self._direction_scores(source, weight, objective, normalization)
         ranked_all = np.argsort(scores, kind="stable")
-        if self.config.variant == "candidate":
+        if self.config.uses_candidate_architecture:
             anchor_index = self._ancestor_index_from_population(
                 self.origin,
                 source,
@@ -468,9 +468,9 @@ class IEMOECRunner:
 
     def _initialize_candidate(self) -> None:
         if self.initial_X is None:
-            raise ValueError("candidate 需要公共 initial_X")
+            raise ValueError("candidate/s2 需要公共 initial_X")
         if self.remaining < self.pop_size:
-            raise ValueError("candidate 的 MaxFEs 不能小于公共初始种群 N")
+            raise ValueError("candidate/s2 的 MaxFEs 不能小于公共初始种群 N")
         initial = Population.new("X", self.initial_X.copy())
         initial.set("provenance", np.full(len(initial), "initial", dtype=object))
         self.candidate_pool = self._evaluate_unique(initial)
@@ -1017,6 +1017,6 @@ class IEMOECRunner:
         return final, outer
 
     def run(self) -> tuple[Population, int]:
-        if self.config.variant == "candidate":
+        if self.config.uses_candidate_architecture:
             return self._run_candidate()
         return self._run_legacy()

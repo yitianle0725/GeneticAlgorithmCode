@@ -20,7 +20,7 @@ ALGORITHM_LABELS = {
     "IEMOEC": "IEMOEC",
 }
 
-IEMOEC_SCHEMA_VERSIONS = {"v0": 0, "s1": 1, "candidate": 2}
+IEMOEC_SCHEMA_VERSIONS = {"v0": 0, "s1": 1, "candidate": 2, "s2": 3}
 BASELINE_SCHEMA_VERSION = 2
 
 
@@ -91,6 +91,20 @@ class IEMOECConfig:
                 "fe_scheduler": "fixed_batch",
                 "pairing_strategy": "farthest_weight",
             },
+            "s2": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "local_fe_ratio": 0.75,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+            },
         }
         if variant not in profiles:
             raise ValueError(f"未知 IEMOEC variant: {variant}")
@@ -101,9 +115,13 @@ class IEMOECConfig:
     def algorithm_schema_version(self) -> int:
         return IEMOEC_SCHEMA_VERSIONS[self.variant]
 
+    @property
+    def uses_candidate_architecture(self) -> bool:
+        return self.variant in ("candidate", "s2")
+
     def validate(self) -> None:
         if self.variant not in IEMOEC_SCHEMA_VERSIONS:
-            raise ValueError("variant 仅支持 v0、s1 或 candidate")
+            raise ValueError("variant 仅支持 v0、s1、candidate 或 s2")
         if self.initialization_mode not in ("legacy_origin", "shared_population"):
             raise ValueError(
                 "initialization_mode 仅支持 legacy_origin 或 shared_population"
@@ -180,8 +198,8 @@ class IEMOECConfig:
                 or self.pairing_strategy != "farthest_weight"
             ):
                 raise ValueError("v0/s1 的兼容路径不允许启用 candidate 机制")
-        if self.variant == "candidate" and self.retain_island_state:
-            raise ValueError("candidate 当前仅支持周期性重建岛，不保留岛状态")
+        if self.uses_candidate_architecture and self.retain_island_state:
+            raise ValueError("candidate/s2 仅支持周期性重建岛，不保留岛状态")
         if (
             self.fe_scheduler == "fixed_batch"
             and self.pairing_strategy == "none"

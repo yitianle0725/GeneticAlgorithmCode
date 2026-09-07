@@ -113,7 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="重新运行完全相同的配置；不同配置仍须更换 run-name",
     )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--iemoec-variant", choices=["v0", "s1", "candidate"], default="s1")
+    parser.add_argument(
+        "--iemoec-variant",
+        choices=["v0", "s1", "candidate", "s2"],
+        default="s2",
+    )
     parser.add_argument(
         "--iemoec-survival",
         choices=["nsga3", "rank", "rank_crowding"],
@@ -192,14 +196,14 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "pairing_strategy": args.pairing_strategy,
     }
     overrides.update({key: value for key, value in optional.items() if value is not None})
-    if args.no_recombination and args.iemoec_variant == "candidate":
+    if args.no_recombination and args.iemoec_variant in ("candidate", "s2"):
         overrides.update({
             "pairing_strategy": "none",
             "local_fe_ratio": 1.0,
             "recombination_fe_ratio": 0.0,
         })
     elif (
-        args.iemoec_variant == "candidate"
+        args.iemoec_variant in ("candidate", "s2")
         and args.pairing_strategy == "none"
         and args.local_fe_ratio is None
         and args.recombination_fe_ratio is None
