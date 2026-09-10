@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
+from iemoec_experiment.manifest import load_manifest, validate_result_rows  # noqa: E402
 
 
 METRICS = (
@@ -28,24 +29,31 @@ ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
     "MOEAD": "MOEA/D-TCH",
+    "MOEADPBI": "MOEA/D-PBI",
     "RVEA": "RVEA",
     "AGEMOEA2": "AGE-MOEA2",
+    "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
 }
 
 
-def load_rows(root: Path) -> list[dict]:
+def load_rows(root: Path, allow_incomplete: bool = False) -> tuple[list[dict], dict]:
+    manifest = load_manifest(root)
     rows = []
     for path in root.rglob("metrics.json"):
         with path.open(encoding="utf-8") as handle:
             row = json.load(handle)
-        if row.get("metric_schema_version") != METRIC_SCHEMA_VERSION:
+        if row.get("metric_schema_version") != manifest["metric_schema_version"]:
             raise RuntimeError(
-                f"{path} 使用旧指标定义；请重新运行对应实验以生成 GD+ 和 pymoo Spacing"
+                f"{path} does not match manifest metric schema "
+                f"{manifest['metric_schema_version']}"
             )
         row["path"] = str(path.parent)
         rows.append(row)
-    return rows
+    validation = validate_result_rows(rows, manifest, allow_incomplete)
+    validation["run_name"] = manifest["run_name"]
+    validation["metric_schema_version"] = manifest["metric_schema_version"]
+    return rows, validation
 
 
 def holm_adjust(p_values: list[float]) -> list[float]:
@@ -174,11 +182,33 @@ def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
 def friedman_report(rows: list[dict]) -> dict:
     algorithms = sorted({row["algorithm"] for row in rows})
     instances = sorted({(row["problem"], row["n_obj"]) for row in rows})
+    lookup = {
+        (row["problem"], row["n_obj"], row["algorithm"], row["seed"]): row
+        for row in rows
+    }
     means = defaultdict(dict)
+    common_seed_counts = {}
+    excluded_run_blocks = 0
     for problem, n_obj in instances:
+        seed_sets = [
+            {
+                row["seed"] for row in rows
+                if row["problem"] == problem
+                and row["n_obj"] == n_obj
+                and row["algorithm"] == algorithm
+            }
+            for algorithm in algorithms
+        ]
+        common_seeds = set.intersection(*seed_sets) if seed_sets else set()
+        all_seeds = set.union(*seed_sets) if seed_sets else set()
+        common_seed_counts[f"{problem}-M{n_obj}"] = len(common_seeds)
+        excluded_run_blocks += len(all_seeds - common_seeds)
         for algorithm in algorithms:
-            values = [r["igd_plus"] for r in rows if r["problem"] == problem and r["n_obj"] == n_obj and r["algorithm"] == algorithm]
-            if values:
+            values = [
+                lookup[(problem, n_obj, algorithm, seed)]["igd_plus"]
+                for seed in sorted(common_seeds)
+            ]
+            if common_seeds:
                 means[(problem, n_obj)][algorithm] = float(np.mean(values))
     complete = [instance for instance in instances if len(means[instance]) == len(algorithms)]
     ranks = {algorithm: [] for algorithm in algorithms}
@@ -189,6 +219,9 @@ def friedman_report(rows: list[dict]) -> dict:
     report = {
         "metric": "igd_plus", "blocks": len(complete), "algorithms": algorithms,
         "average_ranks": {algorithm: float(np.mean(value)) if value else None for algorithm, value in ranks.items()},
+        "common_seed_counts": common_seed_counts,
+        "excluded_incomplete_seed_blocks": excluded_run_blocks,
+        "missing_values_imputed": False,
     }
     if len(algorithms) >= 3 and len(complete) >= 2:
         samples = [[means[instance][algorithm] for instance in complete] for algorithm in algorithms]
@@ -204,14 +237,24 @@ def main() -> int:
     parser.add_argument("results", type=Path, help="例如 results/pilot")
     parser.add_argument("--target", default="IEMOEC")
     parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="allow missing manifest tasks for exploratory summaries",
+    )
     args = parser.parse_args()
-    rows = load_rows(args.results)
+    try:
+        rows, validation = load_rows(args.results, args.allow_incomplete)
+    except RuntimeError as exc:
+        parser.error(str(exc))
     if not rows:
         raise SystemExit(f"未在 {args.results} 找到 metrics.json")
     write_csv(args.results / "summary.csv", summarize(rows))
     write_csv(args.results / "wilcoxon_holm.csv", paired_tests(rows, args.target, args.alpha))
     with (args.results / "friedman.json").open("w", encoding="utf-8") as handle:
         json.dump(friedman_report(rows), handle, ensure_ascii=False, indent=2)
+    with (args.results / "summary_validation.json").open("w", encoding="utf-8") as handle:
+        json.dump(validation, handle, ensure_ascii=False, indent=2)
     print(f"已汇总 {len(rows)} 次独立运行: {args.results}")
     return 0
 

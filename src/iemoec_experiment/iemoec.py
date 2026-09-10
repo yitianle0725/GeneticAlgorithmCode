@@ -585,6 +585,27 @@ class IEMOECRunner:
             all_offspring = _merge(all_offspring, offspring)
         return islands, all_offspring
 
+    def _evolve_shared_pool_with_budget(
+        self,
+        islands: list[Population],
+        budget: int,
+    ) -> tuple[Population, Population]:
+        """Generate local offspring from one shared pool without island survival."""
+        parent_pool, _, _ = self._deduplicate_population(_merge(*islands))
+        if budget == 0 or len(parent_pool) < 2:
+            return parent_pool, Population.empty()
+        order = self.rng.permutation(len(parent_pool))
+        if len(order) % 2:
+            order = np.append(order, order[0])
+        pairs = order.reshape(-1, 2)
+        offspring = self._produce_unique_offspring(
+            parent_pool,
+            pairs,
+            budget,
+            "local_shared",
+        )
+        return parent_pool, offspring
+
     def _island_representatives(
         self,
         islands: list[Population],
@@ -598,6 +619,18 @@ class IEMOECRunner:
             scores = normalization.tchebycheff(island.get("F"), weight)
             representatives.append(island[int(np.argmin(scores))].copy())
         return Population.create(*representatives) if representatives else Population.empty()
+
+    def _shared_representatives(
+        self,
+        population: Population,
+        weights: list[np.ndarray],
+        normalization: ObjectiveNormalization,
+    ) -> Population:
+        representatives = []
+        for weight in weights:
+            scores = normalization.tchebycheff(population.get("F"), weight)
+            representatives.append(population[int(np.argmin(scores))].copy())
+        return Population.create(*representatives)
 
     def _representative_pairs(
         self,
@@ -807,18 +840,28 @@ class IEMOECRunner:
             )
             local_budget = round(outer_batch_fes * self.config.local_fe_ratio)
             recombination_budget = outer_batch_fes - local_budget
-            islands, local_offspring = self._evolve_islands_with_budget(
-                islands,
-                weights,
-                phase,
-                local_budget,
-                normalization,
-            )
-            representatives = self._island_representatives(
-                islands,
-                weights,
-                normalization,
-            )
+            if self.config.local_evolution_mode == "shared":
+                shared_parents, local_offspring = (
+                    self._evolve_shared_pool_with_budget(islands, local_budget)
+                )
+                representatives = self._shared_representatives(
+                    _merge(shared_parents, local_offspring),
+                    weights,
+                    normalization,
+                )
+            else:
+                islands, local_offspring = self._evolve_islands_with_budget(
+                    islands,
+                    weights,
+                    phase,
+                    local_budget,
+                    normalization,
+                )
+                representatives = self._island_representatives(
+                    islands,
+                    weights,
+                    normalization,
+                )
             recombined = self._recombine_with_budget(
                 representatives,
                 weights,
@@ -873,6 +916,7 @@ class IEMOECRunner:
                 "origin_population_size": len(self.origin),
                 "candidate_population_size": len(self.candidate_pool),
                 "island_initialization": self.config.island_initialization,
+                "local_evolution_mode": self.config.local_evolution_mode,
                 "island_source_population_size": island_source_population_size,
                 "expansion_fes": 0,
                 "island_evolution_fes": len(local_offspring),

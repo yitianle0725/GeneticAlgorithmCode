@@ -6,19 +6,31 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from iemoec_experiment.manifest import (  # noqa: E402
+    load_manifest,
+    task_key,
+    validate_result_rows,
+)
+
 
 ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
     "MOEAD": "MOEA/D-TCH",
+    "MOEADPBI": "MOEA/D-PBI",
     "RVEA": "RVEA",
     "AGEMOEA2": "AGE-MOEA2",
+    "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
 }
 
@@ -39,6 +51,21 @@ def algorithm_label(config: dict) -> str:
 def read_csv(path: Path) -> list[dict]:
     with path.open(encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def validate_dataset(root: Path, allow_incomplete: bool) -> None:
+    manifest = load_manifest(root)
+    rows = []
+    for path in root.rglob("metrics.json"):
+        with path.open(encoding="utf-8") as handle:
+            rows.append(json.load(handle))
+    validate_result_rows(rows, manifest, allow_incomplete)
+    expected = {task_key(task) for task in manifest["tasks"]}
+    for path in root.rglob("config.json"):
+        with path.open(encoding="utf-8") as handle:
+            key = task_key(json.load(handle))
+        if key not in expected:
+            raise RuntimeError(f"configuration outside the manifest: {path}")
 
 
 def convergence(root: Path, output: Path) -> None:
@@ -134,7 +161,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("results", type=Path)
     parser.add_argument("--kind", choices=["all", "convergence", "boxplot", "parallel"], default="all")
+    parser.add_argument("--allow-incomplete", action="store_true")
     args = parser.parse_args()
+    try:
+        validate_dataset(args.results, args.allow_incomplete)
+    except RuntimeError as exc:
+        parser.error(str(exc))
     output = args.results / "figures"
     output.mkdir(parents=True, exist_ok=True)
     if args.kind in ("all", "convergence"):

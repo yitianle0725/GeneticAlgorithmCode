@@ -7,7 +7,8 @@ from typing import Any
 
 
 SUPPORTED_ALGORITHMS = (
-    "NSGA2", "NSGA3", "MOEAD", "RVEA", "AGEMOEA2", "IEMOEC"
+    "NSGA2", "NSGA3", "MOEAD", "MOEADPBI", "RVEA",
+    "AGEMOEA2", "AGEMOEA2STABLE", "IEMOEC",
 )
 DEFAULT_ALGORITHMS = ("NSGA2", "NSGA3", "MOEAD", "IEMOEC")
 SUPPORTED_OBJECTIVES = (2, 3, 5, 8, 10, 15)
@@ -15,13 +16,22 @@ ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
     "MOEAD": "MOEA/D-TCH",
+    "MOEADPBI": "MOEA/D-PBI",
     "RVEA": "RVEA",
     "AGEMOEA2": "AGE-MOEA2",
+    "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
 }
 
-IEMOEC_SCHEMA_VERSIONS = {"v0": 0, "s1": 1, "candidate": 2, "s2": 3}
+IEMOEC_SCHEMA_VERSIONS = {
+    "v0": 0,
+    "s1": 1,
+    "candidate": 2,
+    "s2": 3,
+    "s2_no_isolation": 4,
+}
 BASELINE_SCHEMA_VERSION = 2
+STABLE_AGEMOEA2_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -58,6 +68,7 @@ class IEMOECConfig:
     local_fe_ratio: float = 0.75
     recombination_fe_ratio: float = 0.25
     pairing_strategy: str = "farthest_weight"
+    local_evolution_mode: str = "island"
 
     @classmethod
     def for_variant(cls, variant: str, **overrides) -> IEMOECConfig:
@@ -105,6 +116,21 @@ class IEMOECConfig:
                 "outer_survival": "nsga3",
                 "pairing_strategy": "farthest_weight",
             },
+            "s2_no_isolation": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "local_fe_ratio": 0.75,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+                "local_evolution_mode": "shared",
+            },
         }
         if variant not in profiles:
             raise ValueError(f"未知 IEMOEC variant: {variant}")
@@ -117,7 +143,7 @@ class IEMOECConfig:
 
     @property
     def uses_candidate_architecture(self) -> bool:
-        return self.variant in ("candidate", "s2")
+        return self.variant in ("candidate", "s2", "s2_no_isolation")
 
     def validate(self) -> None:
         if self.variant not in IEMOEC_SCHEMA_VERSIONS:
@@ -181,6 +207,12 @@ class IEMOECConfig:
         }
         if self.pairing_strategy not in strategies:
             raise ValueError(f"pairing_strategy 必须属于 {sorted(strategies)}")
+        if self.local_evolution_mode not in ("island", "shared"):
+            raise ValueError("local_evolution_mode 仅支持 island 或 shared")
+        if self.variant == "s2_no_isolation" and self.local_evolution_mode != "shared":
+            raise ValueError("s2_no_isolation 必须使用 shared 局部演化")
+        if self.variant != "s2_no_isolation" and self.local_evolution_mode != "island":
+            raise ValueError("仅 s2_no_isolation 可以使用 shared 局部演化")
         if self.variant in ("v0", "s1"):
             expected_initialization = (
                 "single_ancestor" if self.variant == "v0" else "multi_ancestor"
@@ -222,6 +254,7 @@ class ExperimentCase:
     history_hv: bool = False
     reference_points: int = 1000
     high_dim_hv_samples: int = 20000
+    timing_only: bool = False
     iemoec: IEMOECConfig = field(default_factory=IEMOECConfig)
 
     def validate(self) -> None:
@@ -257,12 +290,16 @@ class ExperimentCase:
     def algorithm_schema_version(self) -> int:
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.algorithm_schema_version
+        if self.normalized_algorithm == "AGEMOEA2STABLE":
+            return STABLE_AGEMOEA2_SCHEMA_VERSION
         return BASELINE_SCHEMA_VERSION
 
     @property
     def algorithm_variant(self) -> str:
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.variant
+        if self.normalized_algorithm == "AGEMOEA2STABLE":
+            return "stable_zero_norm_guard"
         return "baseline"
 
     @property
@@ -273,7 +310,9 @@ class ExperimentCase:
             "rank": "IEMOEC-Rank",
             "rank_crowding": "IEMOEC-CD",
             "nsga3": "IEMOEC-RD",
-        }[self.iemoec.outer_survival]
+        }[self.iemoec.outer_survival] + (
+            "-NoIsolation" if self.iemoec.variant == "s2_no_isolation" else ""
+        )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

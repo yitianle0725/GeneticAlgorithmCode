@@ -13,7 +13,7 @@ _REFERENCE_DATA_CACHE: dict[
     tuple[np.ndarray, np.ndarray, np.ndarray],
 ] = {}
 
-METRIC_SCHEMA_VERSION = 4
+METRIC_SCHEMA_VERSION = 5
 
 
 def _deterministic_reference_directions(
@@ -67,6 +67,25 @@ def _make_reference_front(
     name = problem.__class__.__name__.lower()
     if "wfg" in module:
         return _wfg_reference_front(problem, n_points)
+    if name in ("dtlz5", "dtlz6"):
+        # DTLZ5/6 共用同一条退化 Pareto 曲线。pymoo 的 M=3 分支
+        # 依赖外部数据文件，因此直接复用其解析式以保持离线可运行。
+        theta_1 = np.linspace(0.0, np.pi / 2.0, n_points)
+        theta = np.column_stack(
+            [theta_1]
+            + [np.full(n_points, np.pi / 4.0)] * (problem.n_obj - 2)
+        )
+        cosine = np.cos(theta)
+        sine = np.sin(theta)
+        front = np.zeros((n_points, problem.n_obj))
+        for objective in range(problem.n_obj):
+            front[:, objective] = np.prod(
+                cosine[:, : problem.n_obj - 1 - objective],
+                axis=1,
+            )
+            if objective > 0:
+                front[:, objective] *= sine[:, problem.n_obj - 1 - objective]
+        return front
     if name == "dtlz7":
         # pymoo 的 M=3 路径依赖可下载数据文件，M>3 路径又不接受
         # ref_dirs。这里复用其解析式和固定随机种子，避免网络与 API 分支。
@@ -122,11 +141,14 @@ class MetricSuite:
         n_reference_points: int = 1000,
         hv_samples: int = 20000,
         direction_directions: np.ndarray | None = None,
+        hv_reference_point: float = 1.1,
     ):
         problem_module = problem.__class__.__module__.lower()
         problem_name = problem.__class__.__name__.lower()
         if "wfg" in problem_module:
             self.reference_front_method = "pymoo_pareto_set_seed_1"
+        elif problem_name in ("dtlz5", "dtlz6"):
+            self.reference_front_method = "pymoo_dtlz5_dtlz6_formula"
         elif problem_name == "dtlz7":
             self.reference_front_method = "pymoo_dtlz7_formula_seed_42"
         else:
@@ -143,9 +165,15 @@ class MetricSuite:
             if direction_directions is None
             else np.asarray(direction_directions, dtype=float)
         )
+        if hv_reference_point <= 0:
+            raise ValueError("HV reference point must be positive")
         self.hv_method = "exact" if problem.n_obj <= 5 else "monte_carlo"
-        self.hv = HV(ref_point=np.full(problem.n_obj, 1.1)) if problem.n_obj <= 5 else None
-        self.hv_ref = 1.1
+        self.hv_ref = float(hv_reference_point)
+        self.hv = (
+            HV(ref_point=np.full(problem.n_obj, self.hv_ref))
+            if problem.n_obj <= 5
+            else None
+        )
         self.hv_samples = np.random.default_rng(20260903).uniform(
             0.0, self.hv_ref, size=(hv_samples, problem.n_obj)
         ) if problem.n_obj > 5 else None
@@ -186,6 +214,20 @@ class MetricSuite:
         box_volume = self.hv_ref ** points.shape[1]
         return float(box_volume * dominated_count / len(self.hv_samples))
 
+    def _hv_values(self, normalized_nd: np.ndarray) -> dict[str, float | int]:
+        return {
+            "hv_reference_point": self.hv_ref,
+            "hv_eligible_solution_count": int(
+                np.sum(np.all(np.maximum(normalized_nd, 0.0) < self.hv_ref, axis=1))
+            ),
+            "hv": self._calculate_hv(normalized_nd),
+        }
+
+    def calculate_hv(self, F: np.ndarray) -> dict[str, float | int]:
+        nd = nondominated(np.asarray(F, dtype=float))
+        normalized_nd = normalize(nd, self.ideal, self.nadir)
+        return self._hv_values(normalized_nd)
+
     def calculate(self, F: np.ndarray, include_hv: bool = True) -> dict[str, float | int]:
         F = np.asarray(F, dtype=float)
         nd = nondominated(F)
@@ -211,5 +253,5 @@ class MetricSuite:
                 len(np.unique(assigned)) / len(directions)
             )
         if include_hv:
-            result["hv"] = self._calculate_hv(normalized_nd)
+            result.update(self._hv_values(normalized_nd))
         return result

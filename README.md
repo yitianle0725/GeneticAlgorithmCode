@@ -4,8 +4,8 @@
 
 ## 设计原则
 
-- NSGA-II、NSGA-III、MOEA/D-TCH、RVEA、AGE-MOEA2、DTLZ、WFG、SBX、多项式变异、非支配排序和质量指标直接使用 pymoo。
-- 四个算法在相同问题与目标数下共享种群规模，并严格使用相同 `MaxFEs`。
+- NSGA-II、NSGA-III、MOEA/D-TCH、MOEA/D-PBI、RVEA、AGE-MOEA2、DTLZ、WFG、SBX、多项式变异、非支配排序和质量指标直接使用 pymoo。
+- 所有算法在相同问题与目标数下共享种群规模，并严格使用相同 `MaxFEs`。
 - 每个 problem、目标数和 seed 使用同一份缓存 `X_init`；candidate/S2 会先评价完整 N，再构造 origin。
 - 正式实验不使用 HV/IGD 早停，不提供 IEMOEC 专属的额外 PF 扩展。
 - 低维（M≤5）计算精确 HV；高维使用固定公共采样点的 Monte Carlo HV。
@@ -20,6 +20,8 @@ python -c "import pymoo; print(pymoo.__version__)"
 ```
 
 所需包记录在 `requirement.txt`。当前代码面向 `pymoo>=0.6.2,<0.7`。
+AGE-MOEA2 还需要 `numba>=0.59`；运行扩展基线前请先执行
+`python -m pip install -r requirement.txt`。
 
 ## 实验层级
 
@@ -47,7 +49,30 @@ DTLZ2/3/4/7、WFG1/2/4/9，M=3/5/10，5 个种子。首先只审核任务：
 python scripts/run.py --preset structure --iemoec-variant candidate --dry-run
 ```
 
-### 4. 正式实验
+### 4. 扩展基线预实验
+
+`benchmark_smoke` 使用 DTLZ2、M=3、seed=1 检查全部 7 个算法，共 7 项：
+
+```powershell
+python scripts/run.py --preset benchmark_smoke --iemoec-variant s2 --workers 4
+```
+
+`benchmark_pilot` 覆盖 DTLZ1–7、WFG1–9、M=3/5/10、seed=1–5 和全部 7 个算法，
+共 1680 项。先检查任务清单：
+
+```powershell
+python scripts/run.py --preset benchmark_pilot --iemoec-variant s2 --workers 4 --dry-run
+```
+
+确认 smoke 成功后再运行：
+
+```powershell
+python scripts/run.py --preset benchmark_pilot --iemoec-variant s2 --workers 4
+```
+
+其中 `MOEAD` 表示 Tchebycheff 分解，`MOEADPBI` 表示 `PBI(theta=5.0)`。
+
+### 5. 正式实验
 
 DTLZ1–4、WFG1/2/4/9、M=3/5/8/10/15、30 个种子：
 
@@ -163,6 +188,29 @@ python scripts/plot_results.py results/my_pilot --kind all
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+## 严格实验口径
+
+新批次启动时会在结果根目录写入 `experiment_manifest.json`。汇总程序只接受
+manifest 中声明的任务、算法 schema 和 metric schema；缺失任务默认报错。仅在
+pilot 探索阶段可以显式使用 `--allow-incomplete`，该模式不会填补缺失值，并会在
+`summary_validation.json` 中列出被排除的任务。
+
+`AGEMOEA2STABLE` 是带零范数几何保护的独立 baseline，不能与原 `AGEMOEA2`
+结果混用。`s2_no_isolation` 是 S2 的共享局部父代池消融，保留其余方向、预算、
+重组和 NSGA-III survival 配置。
+
+保存的最终种群可以离线审计不同 HV 参考点，无需重新运行算法：
+
+```powershell
+python scripts/audit_hv.py results/my_pilot `
+  --reference-points 1.1 1.5 2.0 `
+  --samples 200000
+```
+
+纯计时批次使用 `--workers 1 --timing-only`。该模式关闭逐代指标与历史记录，并在
+`metrics.json` 中分别保存 `algorithm_runtime_seconds`、
+`metric_runtime_seconds`、`io_runtime_seconds` 和 `total_runtime_seconds`。
 
 测试覆盖公共初始化、目标尺度不变性、多祖先 0 FE、方向子集、pairing、去重、固定 FE 调度、
 严格 MaxFEs、DTLZ2/WFG1 M=3/5/10 集成、最终 history/metrics 一致性和 schema 防混写。

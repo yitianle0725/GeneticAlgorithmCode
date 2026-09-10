@@ -92,7 +92,7 @@ def _write_history(path: Path, rows: list[dict]) -> None:
         preferred = [
             "fe", "observed_fe", "runtime_seconds", "event", "population_size",
             "igd_plus", "gd_plus", "hv", "spacing", "direction_occupancy",
-            "onvg", "nd_ratio",
+            "hv_reference_point", "hv_eligible_solution_count", "onvg", "nd_ratio",
         ]
         available = {key for row in rows for key in row}
         fieldnames = [key for key in preferred if key in available]
@@ -192,7 +192,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         direction_directions=reference_directions(case),
     )
     history = HistoryRecorder(suite, case.max_fes, case.history_points, case.history_hv)
-    started = time.perf_counter()
+    algorithm_started = time.perf_counter()
 
     extra = {}
     if case.normalized_algorithm == "IEMOEC":
@@ -200,11 +200,19 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
             problem,
             case,
             initial_X=initial_X,
-            on_checkpoint=lambda fe, pop: history.record(fe, pop),
-            on_outer_selection=lambda fe, pop: history.record_event(
-                fe,
-                pop,
-                "outer_selection",
+            on_checkpoint=(
+                None
+                if case.timing_only
+                else lambda fe, pop: history.record(fe, pop)
+            ),
+            on_outer_selection=(
+                None
+                if case.timing_only
+                else lambda fe, pop: history.record_event(
+                    fe,
+                    pop,
+                    "outer_selection",
+                )
             ),
         )
         population, outer_iterations = algorithm.run()
@@ -234,25 +242,32 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
             raise ValueError(
                 f"为保证 baseline FE 完全一致，max_fes 必须是共同种群大小 {pop_size} 的倍数"
             )
+        termination = ("n_eval", case.max_fes)
+        if case.normalized_algorithm == "RVEA":
+            # pymoo 0.6.2 将 n_eval 转换为 n_gen 时少计初始化这一代，
+            # 会在只评价初始种群后停止。显式代数可保持严格相同 MaxFEs。
+            termination = ("n_gen", case.max_fes // pop_size)
         result = minimize(
             problem,
             algorithm,
-            termination=("n_eval", case.max_fes),
+            termination=termination,
             seed=case.seed,
-            callback=history,
+            callback=Callback() if case.timing_only else history,
             verbose=False,
             save_history=False,
         )
         population = result.pop
         n_eval = int(result.algorithm.evaluator.n_eval)
 
-    runtime = time.perf_counter() - started
+    algorithm_runtime = time.perf_counter() - algorithm_started
     if n_eval != case.max_fes:
         raise RuntimeError(f"FE 预算违反：期望 {case.max_fes}，实际 {n_eval}")
     F = np.asarray(population.get("F"), dtype=float)
     if not np.all(np.isfinite(F)):
         raise RuntimeError("最终目标值含 NaN/Inf")
+    metric_started = time.perf_counter()
     final_values = suite.calculate(F, include_hv=True)
+    metric_runtime = time.perf_counter() - metric_started
     history.finalize(n_eval, population, final_values)
     metrics = {
         "metric_schema_version": METRIC_SCHEMA_VERSION,
@@ -267,16 +282,24 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         "n_eval": n_eval,
         "population_size": int(len(population)),
         "reference_population_size": int(pop_size),
-        "runtime_seconds": float(runtime),
+        "runtime_seconds": float(algorithm_runtime),
+        "algorithm_runtime_seconds": float(algorithm_runtime),
+        "metric_runtime_seconds": float(metric_runtime),
         "hv_method": suite.hv_method,
         "reference_front_method": suite.reference_front_method,
         "initialization_hash": initial_hash,
         **final_values,
         **extra,
     }
+    io_started = time.perf_counter()
     _write_history(output_dir / "history.csv", history.rows)
     if case.normalized_algorithm == "IEMOEC":
         _write_history(output_dir / "iemoec_diagnostics.csv", algorithm.outer_records)
     _write_population(output_dir / "final_population.csv", population)
+    io_runtime = time.perf_counter() - io_started
+    metrics["io_runtime_seconds"] = float(io_runtime)
+    metrics["total_runtime_seconds"] = float(
+        algorithm_runtime + metric_runtime + io_runtime
+    )
     _json_dump(output_dir / "metrics.json", metrics)
     return {"status": "completed", "output_dir": str(output_dir), **metrics}

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import numpy as np
+
 from pymoo.algorithms.moo.moead import MOEAD
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.nsga3 import NSGA3
+from pymoo.decomposition.pbi import PBI
 from pymoo.decomposition.tchebicheff import Tchebicheff
 from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.mutation.pm import PM
@@ -49,6 +52,18 @@ def make_baseline(case: ExperimentCase, initial_X=None):
             pop_size,
             ref_dirs,
         )
+    if algorithm == "MOEADPBI":
+        return (
+            MOEAD(
+                ref_dirs=ref_dirs,
+                n_neighbors=min(20, pop_size),
+                prob_neighbor_mating=0.9,
+                decomposition=PBI(theta=5.0),
+                **operators,
+            ),
+            pop_size,
+            ref_dirs,
+        )
     if algorithm == "RVEA":
         from pymoo.algorithms.moo.rvea import RVEA
 
@@ -65,4 +80,51 @@ def make_baseline(case: ExperimentCase, initial_X=None):
                 "AGE-MOEA2 需要可选依赖 numba；请先执行 pip install numba"
             ) from exc
         return AGEMOEA2(pop_size=pop_size, **operators), pop_size, ref_dirs
+    if algorithm == "AGEMOEA2STABLE":
+        try:
+            from pymoo.algorithms.moo.age2 import AGEMOEA2, AGEMOEA2Survival
+        except Exception as exc:
+            raise RuntimeError(
+                "AGE-MOEA2 需要可选依赖 numba；请先执行 pip install numba"
+            ) from exc
+
+        class StableAGEMOEA2Survival(AGEMOEA2Survival):
+            @staticmethod
+            def pairwise_distances(front, p):
+                values = np.asarray(front, dtype=float)
+                norms = np.sum(np.maximum(values, 0.0) ** p, axis=1) ** (1.0 / p)
+                if np.all(norms > 0.0):
+                    return AGEMOEA2Survival.pairwise_distances(values, p)
+
+                projected = np.zeros_like(values)
+                valid = norms > 0.0
+                projected[valid] = values[valid] / norms[valid, None]
+                distances = np.zeros((len(values), len(values)), dtype=float)
+                for row in range(len(values) - 1):
+                    for column in range(row + 1, len(values)):
+                        if 0.95 < p < 1.05:
+                            distance = np.linalg.norm(
+                                projected[row] - projected[column]
+                            )
+                        else:
+                            midpoint = 0.5 * (
+                                projected[row] + projected[column]
+                            )
+                            midpoint_norm = (
+                                np.sum(np.maximum(midpoint, 0.0) ** p)
+                                ** (1.0 / p)
+                            )
+                            if midpoint_norm > 0.0:
+                                midpoint = midpoint / midpoint_norm
+                            distance = (
+                                np.linalg.norm(projected[row] - midpoint)
+                                + np.linalg.norm(projected[column] - midpoint)
+                            )
+                        distances[row, column] = distance
+                        distances[column, row] = distance
+                return distances
+
+        stable = AGEMOEA2(pop_size=pop_size, **operators)
+        stable.survival = StableAGEMOEA2Survival()
+        return stable, pop_size, ref_dirs
     raise ValueError(f"未知 baseline: {algorithm}")

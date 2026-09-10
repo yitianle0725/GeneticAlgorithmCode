@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from pymoo.decomposition.pbi import PBI
 from pymoo.indicators.gd_plus import GDPlus
 from pymoo.indicators.spacing import SpacingIndicator
 from pymoo.core.population import Population
@@ -22,10 +23,12 @@ from iemoec_experiment.directions import direction_objective, reference_directio
 from iemoec_experiment.factory import make_baseline, reference_directions
 from iemoec_experiment.iemoec import IEMOECRunner
 from iemoec_experiment.initialization import shared_initial_decisions
+from iemoec_experiment.manifest import build_manifest, validate_result_rows
 from iemoec_experiment.metrics import MetricSuite
 from iemoec_experiment.normalization import ObjectiveNormalization
 from iemoec_experiment.problems import make_problem, standard_problem_dimensions
 from iemoec_experiment.runner import run_case
+from run import PRESETS
 from summarize import vargha_delaney_a12
 
 
@@ -86,6 +89,23 @@ class MetricTests(unittest.TestCase):
         self.assertNotIn("gd", result)
         self.assertAlmostEqual(result["gd_plus"], float(GDPlus(suite.ref_pf)(F)))
         self.assertAlmostEqual(result["spacing"], float(SpacingIndicator()(normalized)))
+        self.assertEqual(result["hv_reference_point"], 1.1)
+        self.assertIn("hv_eligible_solution_count", result)
+
+    def test_hv_eligible_count_distinguishes_zero_volume_points(self):
+        problem = make_problem("dtlz2", 3)
+        suite = MetricSuite(
+            problem,
+            n_reference_points=30,
+            hv_samples=1000,
+            hv_reference_point=1.1,
+        )
+        F = np.vstack([suite.ideal, suite.nadir + 10.0])
+
+        result = suite.calculate(F)
+
+        self.assertEqual(result["hv_eligible_solution_count"], 1)
+        self.assertGreater(result["hv"], 0.0)
 
     def test_high_dimensional_reference_cache_across_problem_instances(self):
         for problem_name in ("dtlz1", "dtlz2", "dtlz3", "dtlz4"):
@@ -118,7 +138,11 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(suite_a.calculate(F)["hv"], suite_b.calculate(F)["hv"])
 
     def test_dtlz7_and_wfg_reference_fronts_are_bounded_and_reproducible(self):
-        for problem_name in ("dtlz7", "wfg1", "wfg2", "wfg4", "wfg9"):
+        for problem_name in (
+            "dtlz5", "dtlz6", "dtlz7",
+            "wfg1", "wfg2", "wfg3", "wfg4", "wfg5",
+            "wfg6", "wfg7", "wfg8", "wfg9",
+        ):
             for n_obj in (3, 5, 10):
                 problem_a = make_problem(problem_name, n_obj)
                 problem_b = make_problem(problem_name, n_obj)
@@ -173,6 +197,42 @@ class StructureHelperTests(unittest.TestCase):
 
         np.testing.assert_allclose(algorithm.initialization.sampling, X)
 
+    def test_moead_pbi_uses_pbi_decomposition(self):
+        case = ExperimentCase("MOEADPBI", "dtlz2", 3, 5, 182)
+        problem = make_problem("dtlz2", 3)
+        pop_size = len(reference_directions(case))
+        X = shared_initial_decisions(problem, pop_size, case.seed)
+
+        algorithm, _, _ = make_baseline(case, initial_X=X)
+
+        self.assertIsInstance(algorithm.decomposition, PBI)
+        self.assertEqual(algorithm.decomposition.theta, 5.0)
+        np.testing.assert_allclose(algorithm.initialization.sampling, X)
+
+    def test_stable_age_matches_original_geometry_and_guards_zero_norm(self):
+        original, _, _ = make_baseline(
+            ExperimentCase("AGEMOEA2", "dtlz2", 3, 5, 182)
+        )
+        stable_case = ExperimentCase("AGEMOEA2STABLE", "dtlz2", 3, 5, 182)
+        stable, _, _ = make_baseline(stable_case)
+        front = np.asarray([
+            [0.1, 0.7, 0.9],
+            [0.5, 0.4, 0.8],
+            [0.8, 0.6, 0.2],
+        ])
+
+        np.testing.assert_allclose(
+            stable.survival.pairwise_distances(front, 2.0),
+            original.survival.pairwise_distances(front, 2.0),
+        )
+        guarded = stable.survival.pairwise_distances(
+            np.vstack([np.zeros(3), -np.ones(3), front]),
+            1.5,
+        )
+        self.assertTrue(np.all(np.isfinite(guarded)))
+        self.assertEqual(stable_case.algorithm_schema_version, 3)
+        self.assertEqual(stable_case.algorithm_variant, "stable_zero_norm_guard")
+
     def test_vargha_delaney_reports_target_superiority(self):
         target = np.asarray([1.0, 2.0, 3.0])
         competitor = np.asarray([4.0, 5.0, 6.0])
@@ -189,6 +249,16 @@ class RunnerTests(unittest.TestCase):
             inner_generations_early=1,
             inner_generations_late=1,
         )
+
+    def test_formal_preset_has_expected_16800_tasks(self):
+        preset = PRESETS["formal"]
+        task_count = (
+            len(preset["problems"])
+            * len(preset["objectives"])
+            * len(preset["seeds"])
+            * len(preset["algorithms"])
+        )
+        self.assertEqual(task_count, 16_800)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -290,7 +360,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result["reference_population_size"], 91)
             self.assertEqual(result["population_size"], 91)
             self.assertTrue(np.isfinite(result["igd_plus"]))
-            self.assertEqual(result["metric_schema_version"], 4)
+            self.assertEqual(result["metric_schema_version"], 5)
             self.assertIn("gd_plus", result)
             self.assertNotIn("gd", result)
             with (case.output_dir / "history.csv").open(
@@ -324,6 +394,29 @@ class RunnerTests(unittest.TestCase):
                     all(int(row["population_size"]) > 4 for row in later_checkpoints)
                 )
 
+    def test_rvea_and_moead_pbi_obey_identical_fe_budget(self):
+        initialization_hashes = []
+        for algorithm in ("RVEA", "MOEADPBI"):
+            case = ExperimentCase(
+                algorithm,
+                "dtlz2",
+                3,
+                41,
+                182,
+                output_root=str(Path(self.output) / algorithm),
+                history_points=3,
+                reference_points=30,
+                iemoec=self.small_iemoec,
+            )
+
+            result = run_case(case, force=True)
+
+            self.assertEqual(result["n_eval"], 182)
+            self.assertEqual(result["reference_population_size"], 91)
+            self.assertGreater(result["population_size"], 0)
+            initialization_hashes.append(result["initialization_hash"])
+        self.assertEqual(len(set(initialization_hashes)), 1)
+
     def test_seed_is_reproducible_and_completed_case_is_skipped(self):
         for algorithm in ("NSGA2", "IEMOEC"):
             case = self.case(algorithm)
@@ -335,6 +428,29 @@ class RunnerTests(unittest.TestCase):
             run_case(case, force=True)
             with (case.output_dir / "final_population.csv").open("rb") as handle:
                 self.assertEqual(population_bytes, handle.read())
+
+    def test_timing_only_separates_algorithm_metrics_and_io(self):
+        case = ExperimentCase(
+            "NSGA2", "dtlz2", 3, 71, 182,
+            output_root=str(Path(self.output) / "timing"),
+            history_points=3,
+            reference_points=30,
+            timing_only=True,
+            iemoec=self.small_iemoec,
+        )
+
+        result = run_case(case, force=True)
+
+        self.assertGreater(result["algorithm_runtime_seconds"], 0.0)
+        self.assertGreater(result["metric_runtime_seconds"], 0.0)
+        self.assertGreaterEqual(result["io_runtime_seconds"], 0.0)
+        self.assertGreater(result["total_runtime_seconds"], 0.0)
+        with (case.output_dir / "history.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as handle:
+            history = list(csv.DictReader(handle))
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["event"], "final")
 
     def test_changed_configuration_requires_new_run_name_even_with_force(self):
         original = self.case("NSGA2")
@@ -544,6 +660,54 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["algorithm_schema_version"], 3)
         self.assertEqual(result["n_eval"], 182)
         self.assertEqual(result["global_selection_count"], 1)
+
+    def test_s2_no_isolation_uses_shared_pool_and_obeys_budget(self):
+        config = IEMOECConfig.for_variant(
+            "s2_no_isolation",
+            island_population=4,
+        )
+        case = ExperimentCase(
+            "IEMOEC", "dtlz2", 3, 39, 250,
+            output_root=str(Path(self.output) / "no_isolation"),
+            history_points=3,
+            reference_points=30,
+            iemoec=config,
+        )
+
+        result = run_case(case, force=True)
+
+        self.assertEqual(result["n_eval"], 250)
+        self.assertEqual(result["algorithm_variant"], "s2_no_isolation")
+        self.assertEqual(result["algorithm_label"], "IEMOEC-RD-NoIsolation")
+        with (case.output_dir / "iemoec_diagnostics.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as handle:
+            diagnostics = list(csv.DictReader(handle))
+        self.assertTrue(
+            all(row["local_evolution_mode"] == "shared" for row in diagnostics)
+        )
+        self.assertEqual(
+            sum(int(row["outer_batch_fes"]) for row in diagnostics),
+            case.max_fes - result["reference_population_size"],
+        )
+
+    def test_manifest_validation_rejects_missing_and_unexpected_tasks(self):
+        cases = [self.case("NSGA2", seed=1), self.case("NSGA3", seed=1)]
+        manifest = build_manifest(cases, metric_schema_version=5)
+        first = cases[0].to_dict()
+        first["metric_schema_version"] = 5
+
+        with self.assertRaisesRegex(RuntimeError, "incomplete"):
+            validate_result_rows([first], manifest)
+        validation = validate_result_rows(
+            [first], manifest, allow_incomplete=True
+        )
+        self.assertEqual(validation["expected"], 2)
+        self.assertEqual(validation["completed"], 1)
+
+        unexpected = dict(first, seed=99)
+        with self.assertRaisesRegex(RuntimeError, "outside the manifest"):
+            validate_result_rows([unexpected], manifest, allow_incomplete=True)
 
     def test_candidate_founders_include_origin_anchor_without_evaluation(self):
         config = IEMOECConfig.for_variant("candidate", island_population=6)

@@ -22,6 +22,7 @@ from iemoec_experiment.config import (  # noqa: E402
     SUPPORTED_ALGORITHMS,
 )
 from iemoec_experiment.factory import reference_directions  # noqa: E402
+from iemoec_experiment.manifest import build_manifest, write_manifest  # noqa: E402
 from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
 from iemoec_experiment.runner import run_case  # noqa: E402
 
@@ -39,6 +40,31 @@ PRESETS = {
         "seeds": list(range(1, 6)),
         "evals_per_pop": 200,
     },
+    "benchmark_smoke": {
+        "algorithms": [
+            "NSGA2", "NSGA3", "MOEAD", "MOEADPBI",
+            "RVEA", "AGEMOEA2STABLE", "IEMOEC",
+        ],
+        "problems": ["dtlz2"],
+        "objectives": [3],
+        "seeds": [1],
+        "evals_per_pop": 20,
+    },
+    "benchmark_pilot": {
+        "algorithms": [
+            "NSGA2", "NSGA3", "MOEAD", "MOEADPBI",
+            "RVEA", "AGEMOEA2STABLE", "IEMOEC",
+        ],
+        "problems": [
+            "dtlz1", "dtlz2", "dtlz3", "dtlz4",
+            "dtlz5", "dtlz6", "dtlz7",
+            "wfg1", "wfg2", "wfg3", "wfg4", "wfg5",
+            "wfg6", "wfg7", "wfg8", "wfg9",
+        ],
+        "objectives": [3, 5, 10],
+        "seeds": list(range(1, 6)),
+        "evals_per_pop": 200,
+    },
     "structure": {
         "problems": [
             "dtlz2", "dtlz3", "dtlz4", "dtlz7",
@@ -48,10 +74,26 @@ PRESETS = {
         "seeds": list(range(1, 6)),
         "evals_per_pop": 200,
     },
+    "mechanism": {
+        "algorithms": ["IEMOEC"],
+        "problems": [
+            "dtlz2", "dtlz3", "dtlz7",
+            "wfg1", "wfg4", "wfg6", "wfg9",
+        ],
+        "objectives": [3, 5, 10],
+        "seeds": list(range(1, 6)),
+        "evals_per_pop": 200,
+    },
     "formal": {
+        "algorithms": [
+            "NSGA2", "NSGA3", "MOEAD", "MOEADPBI",
+            "RVEA", "AGEMOEA2STABLE", "IEMOEC",
+        ],
         "problems": [
             "dtlz1", "dtlz2", "dtlz3", "dtlz4",
-            "wfg1", "wfg2", "wfg4", "wfg9",
+            "dtlz5", "dtlz6", "dtlz7",
+            "wfg1", "wfg2", "wfg3", "wfg4", "wfg5",
+            "wfg6", "wfg7", "wfg8", "wfg9",
         ],
         "objectives": [3, 5, 8, 10, 15],
         "seeds": list(range(1, 31)),
@@ -85,14 +127,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--preset",
-        choices=["smoke", "pilot", "structure", "formal", "custom"],
+        choices=[
+            "smoke", "pilot", "benchmark_smoke", "benchmark_pilot",
+            "structure", "mechanism", "formal", "custom",
+        ],
         default="smoke",
     )
     parser.add_argument(
         "--algorithms",
         nargs="+",
         choices=SUPPORTED_ALGORITHMS,
-        default=list(DEFAULT_ALGORITHMS),
+        default=None,
     )
     parser.add_argument("--problems", nargs="+", help="例如 dtlz2 wfg1")
     parser.add_argument("--objectives", type=parse_int_set, help="例如 3,5,8,10,15")
@@ -100,11 +145,20 @@ def build_parser() -> argparse.ArgumentParser:
     budget = parser.add_mutually_exclusive_group()
     budget.add_argument("--max-fes", type=int, help="显式共同 FE；必须是各 M 共同种群大小的倍数")
     budget.add_argument("--evals-per-pop", type=int, help="推荐：预算=参考方向数×该倍数")
-    parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=min(4, max(1, (os.cpu_count() or 2) - 1)),
+    )
     parser.add_argument("--run-name", help="results 下的实验名；固定名称便于断点续跑")
     parser.add_argument("--output-root", default=str(PROJECT_ROOT / "results"))
     parser.add_argument("--history-points", type=int, default=20)
     parser.add_argument("--history-hv", action="store_true", help="在检查点计算 HV（高维实验不建议）")
+    parser.add_argument(
+        "--timing-only",
+        action="store_true",
+        help="disable history metrics so algorithm_runtime excludes metric overhead",
+    )
     parser.add_argument("--reference-points", type=int, default=1000)
     parser.add_argument("--high-dim-hv-samples", type=int, default=20000)
     parser.add_argument(
@@ -115,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--iemoec-variant",
-        choices=["v0", "s1", "candidate", "s2"],
+        choices=["v0", "s1", "candidate", "s2", "s2_no_isolation"],
         default="s2",
     )
     parser.add_argument(
@@ -165,6 +219,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
     problems = args.problems or preset.get("problems")
     objectives = args.objectives or preset.get("objectives")
     seeds = args.seeds or preset.get("seeds")
+    algorithms = args.algorithms or preset.get("algorithms") or DEFAULT_ALGORITHMS
     evals_per_pop = args.evals_per_pop or preset.get("evals_per_pop", 200)
     if not problems or not objectives or not seeds:
         raise ValueError("custom 模式必须提供 --problems、--objectives 和 --seeds")
@@ -196,14 +251,16 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "pairing_strategy": args.pairing_strategy,
     }
     overrides.update({key: value for key, value in optional.items() if value is not None})
-    if args.no_recombination and args.iemoec_variant in ("candidate", "s2"):
+    if args.no_recombination and args.iemoec_variant in (
+        "candidate", "s2", "s2_no_isolation",
+    ):
         overrides.update({
             "pairing_strategy": "none",
             "local_fe_ratio": 1.0,
             "recombination_fe_ratio": 0.0,
         })
     elif (
-        args.iemoec_variant in ("candidate", "s2")
+        args.iemoec_variant in ("candidate", "s2", "s2_no_isolation")
         and args.pairing_strategy == "none"
         and args.local_fe_ratio is None
         and args.recombination_fe_ratio is None
@@ -223,7 +280,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
                 raise ValueError(
                     f"M={n_obj} 的共同种群大小是 {pop_size}，max_fes={max_fes} 不是其倍数"
                 )
-            for algorithm in args.algorithms:
+            for algorithm in algorithms:
                 for seed in seeds:
                     cases.append(ExperimentCase(
                         algorithm=algorithm,
@@ -236,6 +293,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
                         history_hv=args.history_hv,
                         reference_points=args.reference_points,
                         high_dim_hv_samples=args.high_dim_hv_samples,
+                        timing_only=args.timing_only,
                         iemoec=iemoec,
                     ))
     return cases
@@ -263,6 +321,11 @@ def main() -> int:
     try:
         cases = resolve_cases(args)
         ensure_metric_schema_isolated(cases)
+        manifest = build_manifest(cases, METRIC_SCHEMA_VERSION)
+        write_manifest(
+            Path(cases[0].output_root) / "experiment_manifest.json",
+            manifest,
+        )
     except ValueError as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2
