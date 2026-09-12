@@ -14,9 +14,11 @@ from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.ref_dirs import get_reference_directions
 
 from .config import ExperimentCase
+from .directional_memory import DirectionalMemory
 from .directions import direction_objective, reference_direction_subset
 from .factory import reference_directions
 from .normalization import ObjectiveNormalization
+from .source_budget import SOURCES, SourceBudgetController
 
 
 def _merge(*populations: Population) -> Population:
@@ -606,6 +608,57 @@ class IEMOECRunner:
         )
         return parent_pool, offspring
 
+    def _produce_isolated_offspring(
+        self,
+        parent_pools: list[Population],
+        budget: int,
+    ) -> Population:
+        """按方向均分预算，只在各自的持久记忆内选择父代。"""
+        if budget == 0:
+            return Population.empty()
+        base, extra = divmod(budget, len(parent_pools))
+        offspring = Population.empty()
+        for direction_id, parent_pool in enumerate(parent_pools):
+            quota = base + (1 if direction_id < extra else 0)
+            if quota == 0:
+                continue
+            if len(parent_pool) < 2:
+                raise RuntimeError("方向记忆中的父代不足 2 个")
+            order = self.rng.permutation(len(parent_pool))
+            if len(order) % 2:
+                order = np.append(order, order[0])
+            pairs = order.reshape(-1, 2)
+            generated = self._produce_unique_offspring(
+                parent_pool,
+                pairs,
+                quota,
+                "isolated",
+            )
+            offspring = _merge(offspring, generated)
+        return offspring
+
+    def _produce_shared_offspring(
+        self,
+        memory_population: Population,
+        budget: int,
+    ) -> Population:
+        """从全部方向记忆的决策去重池中生成共享后代。"""
+        if budget == 0:
+            return Population.empty()
+        parent_pool, _, _ = self._deduplicate_population(memory_population)
+        if len(parent_pool) < 2:
+            raise RuntimeError("共享父代池中的父代不足 2 个")
+        order = self.rng.permutation(len(parent_pool))
+        if len(order) % 2:
+            order = np.append(order, order[0])
+        pairs = order.reshape(-1, 2)
+        return self._produce_unique_offspring(
+            parent_pool,
+            pairs,
+            budget,
+            "shared",
+        )
+
     def _island_representatives(
         self,
         islands: list[Population],
@@ -770,6 +823,21 @@ class IEMOECRunner:
         )
         return survived / len(offspring)
 
+    def _survival_count(
+        self,
+        offspring: Population,
+        selected: Population,
+    ) -> int:
+        if not len(offspring):
+            return 0
+        selected_keys = {
+            self._x_key(individual.get("X")) for individual in selected
+        }
+        return sum(
+            self._x_key(individual.get("X")) in selected_keys
+            for individual in offspring
+        )
+
     def _unique_ratio(self, population: Population) -> float:
         if not len(population):
             return 0.0
@@ -818,6 +886,333 @@ class IEMOECRunner:
             ])
             improved += int(np.any(child_scores < representative_scores - 1e-12))
         return improved / len(offspring)
+
+    def _assigned_reference_directions(
+        self,
+        population: Population,
+        normalization: ObjectiveNormalization,
+    ) -> set[int]:
+        if not len(population):
+            return set()
+        values = np.maximum(normalization.apply(population.get("F")), 0.0)
+        values /= np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-12)
+        directions = self.ref_dirs / np.maximum(
+            np.linalg.norm(self.ref_dirs, axis=1, keepdims=True),
+            1e-12,
+        )
+        return set(np.argmax(values @ directions.T, axis=1).tolist())
+
+    def _new_direction_count(
+        self,
+        offspring: Population,
+        previous_population: Population,
+        normalization: ObjectiveNormalization,
+    ) -> int:
+        previous = self._assigned_reference_directions(
+            previous_population,
+            normalization,
+        )
+        generated = self._assigned_reference_directions(offspring, normalization)
+        return len(generated - previous)
+
+    def _eligible_direction_elites(
+        self,
+        population: Population,
+        weights: list[np.ndarray],
+        normalization: ObjectiveNormalization,
+    ) -> Population:
+        """从前两个非支配层中为每个方向选择至多一个收敛精英。"""
+        fronts = NonDominatedSorting().do(population.get("F"))
+        eligible_fronts = fronts[:2]
+        if not eligible_fronts:
+            return Population.empty()
+        eligible = np.concatenate(eligible_fronts).astype(int, copy=False)
+        selected = []
+        seen: set[bytes] = set()
+        for weight in weights:
+            scores = normalization.tchebycheff(
+                population[eligible].get("F"),
+                weight,
+            )
+            individual = population[int(eligible[int(np.argmin(scores))])]
+            key = self._x_key(individual.get("X"))
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(individual)
+            if len(selected) >= self.pop_size:
+                break
+        if not selected:
+            return Population.empty()
+        return Population.create(*selected)
+
+    def _select_s3_population(
+        self,
+        merged: Population,
+        weights: list[np.ndarray],
+        normalization: ObjectiveNormalization,
+    ) -> tuple[Population, float, Population]:
+        """执行决策去重、可选方向精英保护和一次全局选择。"""
+        unique, _, unique_ratio = self._deduplicate_population(merged)
+        if len(unique) < self.pop_size:
+            raise RuntimeError("S3 去重后的候选数小于全局种群大小")
+        if not self.config.protect_direction_elites:
+            selected = self._outer_select(unique, self.pop_size)
+            self.global_selection_count += 1
+            return selected, unique_ratio, Population.empty()
+
+        protected = self._eligible_direction_elites(
+            unique,
+            weights,
+            normalization,
+        )
+        protected_keys = {
+            self._x_key(individual.get("X")) for individual in protected
+        }
+        remaining_indices = [
+            index
+            for index, individual in enumerate(unique)
+            if self._x_key(individual.get("X")) not in protected_keys
+        ]
+        remaining = unique[np.asarray(remaining_indices, dtype=int)]
+        fill_count = self.pop_size - len(protected)
+        fill = self._outer_select(remaining, fill_count)
+        selected = _merge(protected, fill)
+        selected_unique, _, _ = self._deduplicate_population(selected)
+        if len(selected) != self.pop_size or len(selected_unique) != self.pop_size:
+            raise RuntimeError("方向精英保护没有生成严格唯一的 N 个个体")
+        self.global_selection_count += 1
+        return selected, unique_ratio, protected
+
+    def _run_s3(self) -> tuple[Population, int]:
+        """运行持久方向记忆、三来源繁殖和可选精英保护结构。"""
+        self._initialize_candidate()
+        definitions = self._island_definitions()
+        weights = [weight for weight, _ in definitions]
+        capacity = self.config.direction_memory_capacity
+        if capacity is None:
+            capacity = math.ceil(self.pop_size / len(weights))
+        memory = DirectionalMemory(
+            self.problem,
+            weights,
+            capacity,
+        )
+        initial_normalization = ObjectiveNormalization.from_objectives(
+            self.candidate_pool.get("F")
+        )
+        memory.update(self.candidate_pool, initial_normalization)
+        budget_controller = SourceBudgetController(
+            {
+                "isolated": self.config.isolated_fe_ratio,
+                "shared": self.config.shared_fe_ratio,
+                "recombination": self.config.recombination_fe_ratio,
+            },
+            adaptive=self.config.adaptive_source_budget,
+            smoothing=self.config.source_budget_smoothing,
+        )
+
+        outer = 0
+        while self.remaining > 0 and len(self.candidate_pool):
+            fe_start = self.n_eval
+            previous_population = self.candidate_pool
+            normalization = ObjectiveNormalization.from_objectives(
+                previous_population.get("F")
+            )
+            parent_pools = memory.parent_pools()
+            memory_population = memory.combined_population()
+            representatives = memory.representatives(normalization)
+            founder_statistics = self._founder_statistics(
+                parent_pools,
+                normalization,
+            )
+
+            outer_batch_fes = min(
+                max(1, round(self.pop_size * self.config.outer_batch_ratio)),
+                self.remaining,
+            )
+            budgets = budget_controller.allocate(outer_batch_fes)
+            isolated = self._produce_isolated_offspring(
+                parent_pools,
+                budgets["isolated"],
+            )
+            shared = self._produce_shared_offspring(
+                memory_population,
+                budgets["shared"],
+            )
+            recombined = self._recombine_with_budget(
+                representatives,
+                weights,
+                budgets["recombination"],
+            )
+            if self.n_eval - fe_start != outer_batch_fes:
+                raise RuntimeError("S3 三类后代没有严格消耗本轮 FE 预算")
+
+            merged = _merge(
+                previous_population,
+                self.origin,
+                memory_population,
+                isolated,
+                shared,
+                recombined,
+            )
+            unique_merged, _, _ = self._deduplicate_population(merged)
+            selection_normalization = ObjectiveNormalization.from_objectives(
+                unique_merged.get("F")
+            )
+            self.candidate_pool, merged_unique_ratio, protected = (
+                self._select_s3_population(
+                    merged,
+                    weights,
+                    selection_normalization,
+                )
+            )
+            memory_statistics = memory.update(
+                unique_merged,
+                selection_normalization,
+            )
+            updated_representatives = memory.representatives(
+                selection_normalization
+            )
+            self.origin = self._update_origin(
+                self.candidate_pool,
+                updated_representatives,
+            )
+
+            offspring_by_source = {
+                "isolated": isolated,
+                "shared": shared,
+                "recombination": recombined,
+            }
+            survival_counts = {
+                source: self._survival_count(offspring, self.candidate_pool)
+                for source, offspring in offspring_by_source.items()
+            }
+            improvement_rates = {
+                source: self._direction_improvement_rate(
+                    offspring,
+                    representatives,
+                    weights,
+                    normalization,
+                )
+                for source, offspring in offspring_by_source.items()
+            }
+            new_direction_counts = {
+                source: self._new_direction_count(
+                    offspring,
+                    previous_population,
+                    selection_normalization,
+                )
+                for source, offspring in offspring_by_source.items()
+            }
+            contributions = {}
+            for source in SOURCES:
+                generated = len(offspring_by_source[source])
+                if generated == 0:
+                    contributions[source] = 0.0
+                    continue
+                scalar_improvements = improvement_rates[source] * generated
+                contributions[source] = (
+                    survival_counts[source]
+                    + new_direction_counts[source]
+                    + scalar_improvements
+                ) / generated
+            budget_controller.update(contributions)
+
+            selected_normalization = ObjectiveNormalization.from_objectives(
+                self.candidate_pool.get("F")
+            )
+            occupancy, empty_ratio = self._direction_coverage(
+                self.candidate_pool,
+                selected_normalization,
+            )
+            outer += 1
+            local_offspring = _merge(isolated, shared)
+            record = {
+                "outer_iteration": outer,
+                "phase": "persistent_direction_memory",
+                "fe_start": fe_start,
+                "fe_end": self.n_eval,
+                "outer_batch_fes": self.n_eval - fe_start,
+                "island_count": len(parent_pools),
+                **founder_statistics,
+                "merged_unique_ratio": merged_unique_ratio,
+                "isolated_offspring": len(isolated),
+                "shared_offspring": len(shared),
+                "recombination_offspring": len(recombined),
+                "local_offspring": len(local_offspring),
+                "recombination_unique_ratio": self._unique_ratio(recombined),
+                "isolated_survival_rate": self._survival_rate(
+                    isolated,
+                    self.candidate_pool,
+                ),
+                "shared_survival_rate": self._survival_rate(
+                    shared,
+                    self.candidate_pool,
+                ),
+                "recombination_survival_rate": self._survival_rate(
+                    recombined,
+                    self.candidate_pool,
+                ),
+                "local_survival_rate": self._survival_rate(
+                    local_offspring,
+                    self.candidate_pool,
+                ),
+                "isolated_scalar_improvement_rate": improvement_rates["isolated"],
+                "shared_scalar_improvement_rate": improvement_rates["shared"],
+                "recombination_scalar_improvement_rate": (
+                    improvement_rates["recombination"]
+                ),
+                "direction_improvement_rate": improvement_rates["recombination"],
+                "new_direction_count_isolated": new_direction_counts["isolated"],
+                "new_direction_count_shared": new_direction_counts["shared"],
+                "new_direction_count_recombination": (
+                    new_direction_counts["recombination"]
+                ),
+                "direction_memory_turnover": memory_statistics.turnover,
+                "stagnant_direction_ratio": memory_statistics.stagnant_ratio,
+                "direction_memory_capacity": memory.capacity,
+                "direction_memory_population_size": len(memory.combined_population()),
+                "protected_elite_count": len(protected),
+                "protected_elite_survival_rate": self._survival_rate(
+                    protected,
+                    self.candidate_pool,
+                ),
+                "source_budget_local": budgets["isolated"],
+                "source_budget_isolated": budgets["isolated"],
+                "source_budget_shared": budgets["shared"],
+                "source_budget_recombination": budgets["recombination"],
+                "source_contribution_isolated": contributions["isolated"],
+                "source_contribution_shared": contributions["shared"],
+                "source_contribution_recombination": contributions["recombination"],
+                "direction_occupancy": occupancy,
+                "empty_direction_ratio": empty_ratio,
+                "objective_extreme_count": sum(
+                    objective is not None for _, objective in definitions
+                ),
+                "origin_population_size": len(self.origin),
+                "candidate_population_size": len(self.candidate_pool),
+                "island_initialization": "persistent_direction_memory",
+                "local_evolution_mode": self.config.local_evolution_mode,
+                "island_source_population_size": len(memory_population),
+                "expansion_fes": 0,
+                "island_evolution_fes": len(isolated),
+                "island_fes": len(isolated),
+                "recombination_fes": len(recombined),
+                "recombination_budget_ratio": (
+                    budgets["recombination"] / outer_batch_fes
+                ),
+                "island_state_reused": outer > 1,
+            }
+            if self.on_outer_selection is not None:
+                event_metrics = self.on_outer_selection(
+                    self.n_eval,
+                    self.candidate_pool,
+                )
+                if event_metrics:
+                    record.update(event_metrics)
+            self.outer_records.append(record)
+
+        return self.candidate_pool, outer
 
     def _run_candidate(self) -> tuple[Population, int]:
         self._initialize_candidate()
@@ -1061,6 +1456,8 @@ class IEMOECRunner:
         return final, outer
 
     def run(self) -> tuple[Population, int]:
+        if self.config.uses_s3_architecture:
+            return self._run_s3()
         if self.config.uses_candidate_architecture:
             return self._run_candidate()
         return self._run_legacy()

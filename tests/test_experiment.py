@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from iemoec_experiment.config import ExperimentCase, IEMOECConfig
+from iemoec_experiment.directional_memory import DirectionalMemory
 from iemoec_experiment.directions import direction_objective, reference_direction_subset
 from iemoec_experiment.factory import make_baseline, reference_directions
 from iemoec_experiment.iemoec import IEMOECRunner
@@ -28,7 +29,8 @@ from iemoec_experiment.metrics import MetricSuite
 from iemoec_experiment.normalization import ObjectiveNormalization
 from iemoec_experiment.problems import make_problem, standard_problem_dimensions
 from iemoec_experiment.runner import run_case
-from run import PRESETS
+from iemoec_experiment.source_budget import SourceBudgetController
+from run import PRESETS, build_parser, resolve_cases
 from summarize import vargha_delaney_a12
 
 
@@ -260,6 +262,39 @@ class RunnerTests(unittest.TestCase):
         )
         self.assertEqual(task_count, 16_800)
 
+    def test_s3_development_preset_has_expected_100_tasks(self):
+        preset = PRESETS["s3_development"]
+        task_count = (
+            len(preset["problems"])
+            * len(preset["objectives"])
+            * len(preset["seeds"])
+            * len(preset["algorithms"])
+        )
+        self.assertEqual(task_count, 100)
+
+        args = build_parser().parse_args([
+            "--preset", "s3_development",
+            "--iemoec-variant", "s3_memory",
+            "--run-name", "s3_memory_m8_m15",
+            "--dry-run",
+        ])
+        cases = resolve_cases(args)
+        self.assertEqual(len(cases), 100)
+        self.assertTrue(all(case.algorithm_schema_version == 5 for case in cases))
+
+        no_recombination_args = build_parser().parse_args([
+            "--preset", "smoke",
+            "--algorithms", "IEMOEC",
+            "--iemoec-variant", "s3_elite",
+            "--no-recombination",
+        ])
+        no_recombination_case = resolve_cases(no_recombination_args)[0]
+        no_recombination_case.validate()
+        self.assertEqual(
+            no_recombination_case.iemoec.recombination_fe_ratio,
+            0.0,
+        )
+
     def tearDown(self):
         self.temp.cleanup()
 
@@ -342,6 +377,258 @@ class RunnerTests(unittest.TestCase):
             )
             case = ExperimentCase("IEMOEC", "dtlz2", 3, 1, 182, iemoec=config)
             self.assertEqual(case.algorithm_label, label)
+
+    def test_s3_variant_profiles_have_isolated_schemas(self):
+        expected = {
+            "s3_memory": (5, 0.75, 0.0, False, False, "IEMOEC-RD-S3-Memory"),
+            "s3_hybrid": (6, 0.50, 0.25, False, False, "IEMOEC-RD-S3-Hybrid"),
+            "s3_elite": (7, 0.50, 0.25, True, False, "IEMOEC-RD-S3-Elite"),
+            "s3": (8, 0.50, 0.25, True, True, "IEMOEC-RD-S3-Full"),
+        }
+        for variant, values in expected.items():
+            with self.subTest(variant=variant):
+                config = IEMOECConfig.for_variant(variant)
+                config.validate()
+                case = ExperimentCase(
+                    "IEMOEC", "dtlz2", 3, 1, 182, iemoec=config
+                )
+                self.assertEqual(config.algorithm_schema_version, values[0])
+                self.assertEqual(config.isolated_fe_ratio, values[1])
+                self.assertEqual(config.shared_fe_ratio, values[2])
+                self.assertEqual(config.protect_direction_elites, values[3])
+                self.assertEqual(config.adaptive_source_budget, values[4])
+                self.assertEqual(case.algorithm_label, values[5])
+
+        s2_case = ExperimentCase(
+            "IEMOEC",
+            "dtlz2",
+            3,
+            1,
+            182,
+            iemoec=IEMOECConfig.for_variant("s2"),
+        )
+        self.assertNotIn("direction_memory", s2_case.to_dict()["iemoec"])
+
+    def test_s3_rejects_invalid_source_budget(self):
+        with self.assertRaisesRegex(ValueError, "三类来源 FE 比例"):
+            IEMOECConfig.for_variant(
+                "s3_hybrid",
+                isolated_fe_ratio=0.60,
+            ).validate()
+
+    def test_source_budget_is_exact_and_adapts_to_contribution(self):
+        controller = SourceBudgetController(
+            {"isolated": 0.50, "shared": 0.25, "recombination": 0.25},
+            adaptive=True,
+        )
+        initial = controller.allocate(91)
+        for _ in range(6):
+            controller.update(
+                {"isolated": 0.1, "shared": 2.0, "recombination": 0.1}
+            )
+        adapted = controller.allocate(91)
+
+        self.assertEqual(sum(initial.values()), 91)
+        self.assertEqual(initial, {
+            "isolated": 45,
+            "shared": 23,
+            "recombination": 23,
+        })
+        self.assertEqual(sum(adapted.values()), 91)
+        self.assertGreater(adapted["shared"], initial["shared"])
+        self.assertGreaterEqual(adapted["isolated"], math.floor(91 * 0.30))
+        self.assertLessEqual(adapted["shared"], math.ceil(91 * 0.40))
+        self.assertLessEqual(adapted["recombination"], math.ceil(91 * 0.30))
+
+        without_recombination = SourceBudgetController(
+            {"isolated": 2 / 3, "shared": 1 / 3, "recombination": 0.0},
+            adaptive=True,
+        ).allocate(91)
+        self.assertEqual(sum(without_recombination.values()), 91)
+        self.assertEqual(without_recombination["recombination"], 0)
+
+    def test_direction_memory_persists_and_returns_independent_copies(self):
+        problem = make_problem("zdt1", 2, n_var=2)
+        X = np.asarray([
+            [0.05, 0.10], [0.10, 0.30], [0.20, 0.50],
+            [0.40, 0.70], [0.70, 0.20], [0.90, 0.90],
+        ])
+        population = Population.new("X", X, "F", problem.evaluate(X))
+        normalization = ObjectiveNormalization.from_objectives(population.get("F"))
+        memory = DirectionalMemory(
+            problem,
+            [np.asarray([1.0, 1e-3]), np.asarray([1e-3, 1.0])],
+            capacity=3,
+        )
+        memory.update(population, normalization)
+        before = {
+            IEMOECRunner._x_key(individual.get("X"))
+            for individual in memory.combined_population()
+        }
+
+        memory.update(population[-2:], normalization)
+        after = {
+            IEMOECRunner._x_key(individual.get("X"))
+            for individual in memory.combined_population()
+        }
+        pools = memory.parent_pools()
+        identities = [id(individual) for pool in pools for individual in pool]
+
+        self.assertTrue(before & after)
+        self.assertEqual(len(identities), len(set(identities)))
+
+    def test_s3_variants_obey_budget_and_write_diagnostics(self):
+        for variant in ("s3_memory", "s3_hybrid", "s3_elite", "s3"):
+            with self.subTest(variant=variant):
+                config = IEMOECConfig.for_variant(variant)
+                case = ExperimentCase(
+                    "IEMOEC",
+                    "dtlz2",
+                    3,
+                    61,
+                    273,
+                    output_root=str(Path(self.output) / variant),
+                    history_points=3,
+                    reference_points=30,
+                    iemoec=config,
+                )
+                result = run_case(case, force=True)
+                with (case.output_dir / "iemoec_diagnostics.csv").open(
+                    encoding="utf-8-sig",
+                    newline="",
+                ) as handle:
+                    diagnostics = list(csv.DictReader(handle))
+                with (case.output_dir / "final_population.csv").open(
+                    encoding="utf-8-sig",
+                    newline="",
+                ) as handle:
+                    final_rows = list(csv.DictReader(handle))
+
+                self.assertEqual(result["n_eval"], 273)
+                self.assertEqual(len(diagnostics), 2)
+                self.assertEqual(result["global_selection_count"], 2)
+                self.assertEqual(
+                    result["isolated_offspring_total"]
+                    + result["shared_offspring_total"]
+                    + result["recombination_offspring_total"],
+                    case.max_fes - result["reference_population_size"],
+                )
+                self.assertTrue(all(
+                    int(row["isolated_offspring"])
+                    + int(row["shared_offspring"])
+                    + int(row["recombination_offspring"])
+                    == int(row["outer_batch_fes"])
+                    for row in diagnostics
+                ))
+                self.assertEqual(diagnostics[0]["island_state_reused"], "False")
+                self.assertEqual(diagnostics[1]["island_state_reused"], "True")
+                self.assertEqual(int(diagnostics[0]["direction_memory_capacity"]), 16)
+                decision_columns = [
+                    key for key in final_rows[0] if key.startswith("x")
+                ]
+                decisions = [
+                    tuple(row[column] for column in decision_columns)
+                    for row in final_rows
+                ]
+                self.assertEqual(len(decisions), len(set(decisions)))
+                if variant == "s3_memory":
+                    self.assertTrue(all(
+                        int(row["shared_offspring"]) == 0 for row in diagnostics
+                    ))
+                if variant in ("s3_elite", "s3"):
+                    self.assertTrue(all(
+                        int(row["protected_elite_count"]) > 0
+                        for row in diagnostics
+                    ))
+
+    def test_s3_obeys_partial_final_batch(self):
+        config = IEMOECConfig.for_variant("s3_hybrid")
+        case = ExperimentCase(
+            "IEMOEC",
+            "dtlz2",
+            3,
+            67,
+            98,
+            output_root=str(Path(self.output) / "partial_s3"),
+            history_points=2,
+            reference_points=30,
+            iemoec=config,
+        )
+        result = run_case(case, force=True)
+        with (case.output_dir / "iemoec_diagnostics.csv").open(
+            encoding="utf-8-sig",
+            newline="",
+        ) as handle:
+            diagnostic = list(csv.DictReader(handle))[0]
+
+        self.assertEqual(result["n_eval"], 98)
+        self.assertEqual(int(diagnostic["outer_batch_fes"]), 7)
+        self.assertEqual(
+            int(diagnostic["isolated_offspring"])
+            + int(diagnostic["shared_offspring"])
+            + int(diagnostic["recombination_offspring"]),
+            7,
+        )
+
+    def test_s3_is_reproducible_with_the_same_seed(self):
+        config = IEMOECConfig.for_variant("s3")
+        case = ExperimentCase(
+            "IEMOEC", "dtlz2", 3, 71, 273, iemoec=config
+        )
+        problem = make_problem("dtlz2", 3)
+        initial_X = shared_initial_decisions(problem, 91, case.seed)
+        first = IEMOECRunner(problem, case, initial_X=initial_X)
+        second = IEMOECRunner(problem, case, initial_X=initial_X)
+
+        first_population, _ = first.run()
+        second_population, _ = second.run()
+
+        np.testing.assert_allclose(
+            first_population.get("F"),
+            second_population.get("F"),
+        )
+        first_budgets = [
+            (
+                row["source_budget_isolated"],
+                row["source_budget_shared"],
+                row["source_budget_recombination"],
+            )
+            for row in first.outer_records
+        ]
+        second_budgets = [
+            (
+                row["source_budget_isolated"],
+                row["source_budget_shared"],
+                row["source_budget_recombination"],
+            )
+            for row in second.outer_records
+        ]
+        self.assertEqual(first_budgets, second_budgets)
+
+    def test_s3_m15_smoke_uses_two_m_directions(self):
+        config = IEMOECConfig.for_variant("s3_memory")
+        case = ExperimentCase(
+            "IEMOEC",
+            "wfg6",
+            15,
+            73,
+            240,
+            output_root=str(Path(self.output) / "s3_m15"),
+            history_points=2,
+            reference_points=30,
+            high_dim_hv_samples=1000,
+            iemoec=config,
+        )
+        result = run_case(case, force=True)
+        with (case.output_dir / "iemoec_diagnostics.csv").open(
+            encoding="utf-8-sig",
+            newline="",
+        ) as handle:
+            diagnostic = list(csv.DictReader(handle))[0]
+
+        self.assertEqual(result["n_eval"], 240)
+        self.assertEqual(int(diagnostic["island_count"]), 30)
+        self.assertEqual(int(diagnostic["direction_memory_capacity"]), 4)
 
     def case(self, algorithm: str, seed: int = 7):
         return ExperimentCase(

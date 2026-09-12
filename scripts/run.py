@@ -84,6 +84,16 @@ PRESETS = {
         "seeds": list(range(1, 6)),
         "evals_per_pop": 200,
     },
+    "s3_development": {
+        "algorithms": ["IEMOEC"],
+        "problems": [
+            "dtlz1", "dtlz2", "dtlz3", "dtlz5", "dtlz7",
+            "wfg1", "wfg3", "wfg4", "wfg6", "wfg9",
+        ],
+        "objectives": [8, 15],
+        "seeds": list(range(1, 6)),
+        "evals_per_pop": 200,
+    },
     "formal": {
         "algorithms": [
             "NSGA2", "NSGA3", "MOEAD", "MOEADPBI",
@@ -129,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--preset",
         choices=[
             "smoke", "pilot", "benchmark_smoke", "benchmark_pilot",
-            "structure", "mechanism", "formal", "custom",
+            "structure", "mechanism", "s3_development", "formal", "custom",
         ],
         default="smoke",
     )
@@ -169,7 +179,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--iemoec-variant",
-        choices=["v0", "s1", "candidate", "s2", "s2_no_isolation"],
+        choices=[
+            "v0", "s1", "candidate", "s2", "s2_no_isolation",
+            "s3_memory", "s3_hybrid", "s3_elite", "s3",
+        ],
         default="s2",
     )
     parser.add_argument(
@@ -201,6 +214,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--outer-batch-ratio", type=float)
     parser.add_argument("--local-fe-ratio", type=float)
     parser.add_argument("--recombination-fe-ratio", type=float)
+    parser.add_argument("--isolated-fe-ratio", type=float)
+    parser.add_argument("--shared-fe-ratio", type=float)
+    parser.add_argument("--direction-memory-capacity", type=int)
+    parser.add_argument(
+        "--protect-direction-elites",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
+        "--adaptive-source-budget",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--source-budget-smoothing", type=float)
     parser.add_argument(
         "--pairing-strategy",
         choices=[
@@ -248,27 +275,49 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "outer_batch_ratio": args.outer_batch_ratio,
         "local_fe_ratio": args.local_fe_ratio,
         "recombination_fe_ratio": args.recombination_fe_ratio,
+        "isolated_fe_ratio": args.isolated_fe_ratio,
+        "shared_fe_ratio": args.shared_fe_ratio,
+        "direction_memory_capacity": args.direction_memory_capacity,
+        "protect_direction_elites": args.protect_direction_elites,
+        "adaptive_source_budget": args.adaptive_source_budget,
+        "source_budget_smoothing": args.source_budget_smoothing,
         "pairing_strategy": args.pairing_strategy,
     }
     overrides.update({key: value for key, value in optional.items() if value is not None})
-    if args.no_recombination and args.iemoec_variant in (
+    fixed_batch_variants = (
         "candidate", "s2", "s2_no_isolation",
-    ):
-        overrides.update({
-            "pairing_strategy": "none",
-            "local_fe_ratio": 1.0,
-            "recombination_fe_ratio": 0.0,
-        })
+        "s3_memory", "s3_hybrid", "s3_elite", "s3",
+    )
+    if args.no_recombination and args.iemoec_variant in fixed_batch_variants:
+        overrides.update({"pairing_strategy": "none", "recombination_fe_ratio": 0.0})
+        if args.iemoec_variant.startswith("s3"):
+            if args.isolated_fe_ratio is None and args.shared_fe_ratio is None:
+                shared_ratio = (
+                    0.0 if args.iemoec_variant == "s3_memory" else 1 / 3
+                )
+                overrides.update({
+                    "isolated_fe_ratio": 1.0 - shared_ratio,
+                    "shared_fe_ratio": shared_ratio,
+                })
+        else:
+            overrides["local_fe_ratio"] = 1.0
     elif (
-        args.iemoec_variant in ("candidate", "s2", "s2_no_isolation")
+        args.iemoec_variant in fixed_batch_variants
         and args.pairing_strategy == "none"
-        and args.local_fe_ratio is None
         and args.recombination_fe_ratio is None
     ):
-        overrides.update({
-            "local_fe_ratio": 1.0,
-            "recombination_fe_ratio": 0.0,
-        })
+        overrides["recombination_fe_ratio"] = 0.0
+        if args.iemoec_variant.startswith("s3"):
+            if args.isolated_fe_ratio is None and args.shared_fe_ratio is None:
+                shared_ratio = (
+                    0.0 if args.iemoec_variant == "s3_memory" else 1 / 3
+                )
+                overrides.update({
+                    "isolated_fe_ratio": 1.0 - shared_ratio,
+                    "shared_fe_ratio": shared_ratio,
+                })
+        else:
+            overrides["local_fe_ratio"] = 1.0
     iemoec = IEMOECConfig.for_variant(args.iemoec_variant, **overrides)
     cases = []
     for problem in problems:

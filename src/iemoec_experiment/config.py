@@ -29,6 +29,20 @@ IEMOEC_SCHEMA_VERSIONS = {
     "candidate": 2,
     "s2": 3,
     "s2_no_isolation": 4,
+    "s3_memory": 5,
+    "s3_hybrid": 6,
+    "s3_elite": 7,
+    "s3": 8,
+}
+S3_VARIANTS = ("s3_memory", "s3_hybrid", "s3_elite", "s3")
+S3_CONFIG_FIELDS = {
+    "direction_memory",
+    "direction_memory_capacity",
+    "isolated_fe_ratio",
+    "shared_fe_ratio",
+    "protect_direction_elites",
+    "adaptive_source_budget",
+    "source_budget_smoothing",
 }
 BASELINE_SCHEMA_VERSION = 2
 STABLE_AGEMOEA2_SCHEMA_VERSION = 3
@@ -69,6 +83,13 @@ class IEMOECConfig:
     recombination_fe_ratio: float = 0.25
     pairing_strategy: str = "farthest_weight"
     local_evolution_mode: str = "island"
+    direction_memory: bool = False
+    direction_memory_capacity: int | None = None
+    isolated_fe_ratio: float = 0.75
+    shared_fe_ratio: float = 0.0
+    protect_direction_elites: bool = False
+    adaptive_source_budget: bool = False
+    source_budget_smoothing: float = 0.8
 
     @classmethod
     def for_variant(cls, variant: str, **overrides) -> IEMOECConfig:
@@ -131,6 +152,77 @@ class IEMOECConfig:
                 "pairing_strategy": "farthest_weight",
                 "local_evolution_mode": "shared",
             },
+            "s3_memory": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "isolated_fe_ratio": 0.75,
+                "shared_fe_ratio": 0.0,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+                "local_evolution_mode": "island",
+                "direction_memory": True,
+            },
+            "s3_hybrid": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "isolated_fe_ratio": 0.50,
+                "shared_fe_ratio": 0.25,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+                "local_evolution_mode": "hybrid",
+                "direction_memory": True,
+            },
+            "s3_elite": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "isolated_fe_ratio": 0.50,
+                "shared_fe_ratio": 0.25,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+                "local_evolution_mode": "hybrid",
+                "direction_memory": True,
+                "protect_direction_elites": True,
+            },
+            "s3": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "isolated_fe_ratio": 0.50,
+                "shared_fe_ratio": 0.25,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+                "local_evolution_mode": "hybrid",
+                "direction_memory": True,
+                "protect_direction_elites": True,
+                "adaptive_source_budget": True,
+            },
         }
         if variant not in profiles:
             raise ValueError(f"未知 IEMOEC variant: {variant}")
@@ -145,9 +237,15 @@ class IEMOECConfig:
     def uses_candidate_architecture(self) -> bool:
         return self.variant in ("candidate", "s2", "s2_no_isolation")
 
+    @property
+    def uses_s3_architecture(self) -> bool:
+        return self.variant in S3_VARIANTS
+
     def validate(self) -> None:
         if self.variant not in IEMOEC_SCHEMA_VERSIONS:
-            raise ValueError("variant 仅支持 v0、s1、candidate 或 s2")
+            raise ValueError(
+                f"variant 必须属于 {sorted(IEMOEC_SCHEMA_VERSIONS)}"
+            )
         if self.initialization_mode not in ("legacy_origin", "shared_population"):
             raise ValueError(
                 "initialization_mode 仅支持 legacy_origin 或 shared_population"
@@ -195,7 +293,7 @@ class IEMOECConfig:
             raise ValueError("local_fe_ratio 必须在 [0, 1] 内")
         if not 0 <= self.recombination_fe_ratio <= 1:
             raise ValueError("recombination_fe_ratio 必须在 [0, 1] 内")
-        if not math.isclose(
+        if not self.uses_s3_architecture and not math.isclose(
             self.local_fe_ratio + self.recombination_fe_ratio,
             1.0,
             abs_tol=1e-12,
@@ -207,12 +305,17 @@ class IEMOECConfig:
         }
         if self.pairing_strategy not in strategies:
             raise ValueError(f"pairing_strategy 必须属于 {sorted(strategies)}")
-        if self.local_evolution_mode not in ("island", "shared"):
-            raise ValueError("local_evolution_mode 仅支持 island 或 shared")
+        if self.local_evolution_mode not in ("island", "shared", "hybrid"):
+            raise ValueError(
+                "local_evolution_mode 仅支持 island、shared 或 hybrid"
+            )
         if self.variant == "s2_no_isolation" and self.local_evolution_mode != "shared":
             raise ValueError("s2_no_isolation 必须使用 shared 局部演化")
-        if self.variant != "s2_no_isolation" and self.local_evolution_mode != "island":
-            raise ValueError("仅 s2_no_isolation 可以使用 shared 局部演化")
+        if (
+            self.variant not in ("s2_no_isolation", *S3_VARIANTS)
+            and self.local_evolution_mode != "island"
+        ):
+            raise ValueError("当前 variant 不允许共享或混合局部演化")
         if self.variant in ("v0", "s1"):
             expected_initialization = (
                 "single_ancestor" if self.variant == "v0" else "multi_ancestor"
@@ -238,6 +341,58 @@ class IEMOECConfig:
             and self.recombination_fe_ratio > 0
         ):
             raise ValueError("pairing_strategy=none 时 recombination_fe_ratio 必须为 0")
+        if self.direction_memory_capacity is not None and self.direction_memory_capacity < 2:
+            raise ValueError("direction_memory_capacity 必须至少为 2")
+        if not 0 <= self.isolated_fe_ratio <= 1:
+            raise ValueError("isolated_fe_ratio 必须在 [0, 1] 内")
+        if not 0 <= self.shared_fe_ratio <= 1:
+            raise ValueError("shared_fe_ratio 必须在 [0, 1] 内")
+        if not 0 <= self.source_budget_smoothing < 1:
+            raise ValueError("source_budget_smoothing 必须在 [0, 1) 内")
+        if self.uses_s3_architecture:
+            if not self.direction_memory:
+                raise ValueError("S3 必须启用持久方向记忆")
+            if self.initialization_mode != "shared_population":
+                raise ValueError("S3 必须使用 shared_population 初始化")
+            if self.normalization_mode != "global" or self.fe_scheduler != "fixed_batch":
+                raise ValueError("S3 必须使用 global 归一化和 fixed_batch 调度")
+            if not math.isclose(
+                self.isolated_fe_ratio
+                + self.shared_fe_ratio
+                + self.recombination_fe_ratio,
+                1.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("S3 三类来源 FE 比例之和必须等于 1")
+            if not self.enable_recombination and self.recombination_fe_ratio > 0:
+                raise ValueError("关闭重组时 recombination_fe_ratio 必须为 0")
+            expected_mode = "island" if self.variant == "s3_memory" else "hybrid"
+            if self.local_evolution_mode != expected_mode:
+                raise ValueError(
+                    f"{self.variant} 必须使用 {expected_mode} 局部演化模式"
+                )
+            if self.variant == "s3_memory" and (
+                self.shared_fe_ratio != 0
+                or self.protect_direction_elites
+                or self.adaptive_source_budget
+            ):
+                raise ValueError("s3_memory 只能启用持久方向记忆")
+            if self.variant == "s3_hybrid" and (
+                self.shared_fe_ratio <= 0
+                or self.protect_direction_elites
+                or self.adaptive_source_budget
+            ):
+                raise ValueError("s3_hybrid 只增加共享后代")
+            if self.variant == "s3_elite" and (
+                not self.protect_direction_elites
+                or self.adaptive_source_budget
+            ):
+                raise ValueError("s3_elite 必须启用方向精英保护且关闭自适应预算")
+            if self.variant == "s3" and (
+                not self.protect_direction_elites
+                or not self.adaptive_source_budget
+            ):
+                raise ValueError("s3 必须启用方向精英保护和自适应预算")
 
 
 @dataclass(frozen=True)
@@ -306,16 +461,25 @@ class ExperimentCase:
     def algorithm_label(self) -> str:
         if self.normalized_algorithm != "IEMOEC":
             return ALGORITHM_LABELS[self.normalized_algorithm]
-        return {
+        base = {
             "rank": "IEMOEC-Rank",
             "rank_crowding": "IEMOEC-CD",
             "nsga3": "IEMOEC-RD",
-        }[self.iemoec.outer_survival] + (
-            "-NoIsolation" if self.iemoec.variant == "s2_no_isolation" else ""
-        )
+        }[self.iemoec.outer_survival]
+        suffixes = {
+            "s2_no_isolation": "-NoIsolation",
+            "s3_memory": "-S3-Memory",
+            "s3_hybrid": "-S3-Hybrid",
+            "s3_elite": "-S3-Elite",
+            "s3": "-S3-Full",
+        }
+        return base + suffixes.get(self.iemoec.variant, "")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        if not self.iemoec.uses_s3_architecture:
+            for field_name in S3_CONFIG_FIELDS:
+                data["iemoec"].pop(field_name)
         data["algorithm"] = self.normalized_algorithm
         data["problem"] = self.normalized_problem
         data["algorithm_variant"] = self.algorithm_variant

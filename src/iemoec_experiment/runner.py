@@ -234,6 +234,12 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         extra["recombination_offspring_total"] = int(
             sum(row["recombination_offspring"] for row in algorithm.outer_records)
         )
+        extra["isolated_offspring_total"] = int(
+            sum(row.get("isolated_offspring", 0) for row in algorithm.outer_records)
+        )
+        extra["shared_offspring_total"] = int(
+            sum(row.get("shared_offspring", 0) for row in algorithm.outer_records)
+        )
     else:
         algorithm, pop_size, _ = make_baseline(case, initial_X=initial_X)
         if case.max_fes < pop_size:

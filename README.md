@@ -72,15 +72,29 @@ python scripts/run.py --preset benchmark_pilot --iemoec-variant s2 --workers 4
 
 其中 `MOEAD` 表示 Tchebycheff 分解，`MOEADPBI` 表示 `PBI(theta=5.0)`。
 
-### 5. 正式实验
+### 5. S3 顺序消融
 
-DTLZ1–4、WFG1/2/4/9、M=3/5/8/10/15、30 个种子：
+S3 开发集包含 10 个代表问题、M=8/15 和 seeds=1–5，每个版本 100 项。
+先验证持久方向记忆：
+
+```powershell
+python scripts/run.py --preset s3_development --iemoec-variant s3_memory `
+  --workers 4 --run-name s3_memory_m8_m15 --dry-run
+```
+
+确认任务数后去掉 `--dry-run`。只有当前版本达到预设门槛，才依次运行
+`s3_hybrid`、`s3_elite` 和 `s3`，不要并行启动全部消融。
+
+### 6. 正式实验
+
+DTLZ1–7、WFG1–9、M=3/5/8/10/15、30 个种子，共 16800 项：
 
 ```powershell
 python scripts/run.py --preset formal --iemoec-variant s2 --workers 4
 ```
 
-正式实验任务很多。建议先完成 smoke 和 pilot，确认参数后再启动。仅使用任务级并行，不要同时开启岛级多进程。
+当前不要启动该批次。应先完成 S3 顺序消融、高维 pilot、低中维回归并冻结算法。
+正式运行仅使用任务级并行，不要同时开启岛级多进程。
 
 ## 自定义实验
 
@@ -105,7 +119,7 @@ python scripts/run.py --preset custom `
 - `--force`：重新运行完全相同的配置；任何配置差异都必须更换 `--run-name`。
 - `--history-hv`：在历史检查点计算 HV；高维时不建议启用。
 - `--run-name`：固定结果批次名，用于断点续跑。
-- `--iemoec-variant`：选择 `v0`、`s1`、`candidate` 或 `s2`；统一 CLI 默认 `s2`。
+- `--iemoec-variant`：选择旧版、S2 消融或 `s3_memory`、`s3_hybrid`、`s3_elite`、`s3`；统一 CLI 默认 `s2`。
 - `--iemoec-survival`：选择 `rank`、`rank_crowding` 或 `nsga3`。
 - `--iemoec-crowding`：启用拥挤度，供消融实验使用。
 - `--no-recombination`：关闭跨岛组合，供消融实验使用。
@@ -121,6 +135,11 @@ python scripts/run.py --preset custom `
 - `--island-count-multiplier`：构造 `2M` 或 `4M` 个岛；消融结果不支持将 4M 设为默认。
 - `--outer-batch-ratio`：固定外批次相对共同种群 N 的比例。
 - `--local-fe-ratio`、`--recombination-fe-ratio`：candidate/S2 批次内 FE 分配，两者之和必须为 1。
+- `--isolated-fe-ratio`、`--shared-fe-ratio`：S3 方向内和共享父代后代的 FE 比例；与重组比例之和必须为 1。
+- `--direction-memory-capacity`：覆盖每个方向微种群的自动容量 `ceil(N / 2M)`。
+- `--protect-direction-elites`：显式覆盖方向收敛精英保护开关。
+- `--adaptive-source-budget`：显式覆盖三类后代的贡献驱动预算开关。
+- `--source-budget-smoothing`：贡献分数的历史平滑系数。
 - `--pairing-strategy`：`farthest_weight`、`nearest_weight`、`random`、`farthest_decision` 或 `none`。
 - `--inner-generations-early`：前期每轮岛内演化代数，默认为 1。
 - `--inner-generations-late`：后期每轮岛内演化代数，默认为 1。
@@ -133,6 +152,11 @@ python scripts/run.py --preset custom `
 | `s1` | 1 | 仅评价小 origin | 全局池多祖先、0 FE | axis/random、旧预算 | 旧双重选择 |
 | `candidate` | 2 | 评价公共完整 N | origin anchor + supporting founders | 参考方向子集、固定批次 | 每轮一次 survival |
 | `s2` | 3 | 评价公共完整 N | origin anchor + supporting founders | axis/random、2M、固定 N 批次 | 每轮一次 NSGA-III survival |
+| `s2_no_isolation` | 4 | 评价公共完整 N | 每轮共享父代池 | 75/0/25、固定 N 批次 | 每轮一次 NSGA-III survival |
+| `s3_memory` | 5 | 评价公共完整 N | 持久方向微种群 | 75/0/25、固定 N 批次 | NSGA-III survival |
+| `s3_hybrid` | 6 | 评价公共完整 N | 持久方向微种群 | 50/25/25、固定 N 批次 | NSGA-III survival |
+| `s3_elite` | 7 | 评价公共完整 N | 持久方向微种群 | 50/25/25、固定 N 批次 | 方向精英 + NSGA-III |
+| `s3` | 8 | 评价公共完整 N | 持久方向微种群 | 贡献驱动、固定 N 批次 | 方向精英 + NSGA-III |
 
 V0、S1 和 candidate 保留为复现实验入口；完成结构消融后，统一 CLI 默认使用 S2。candidate/S2 每轮使用同一
 ideal/nadir 归一化上下文，先按 X 去重，再执行一次可消融的外层 survival；origin 优先吸收
@@ -163,8 +187,10 @@ results/my_pilot/
 ```
 
 其中 `history.csv` 的 `fe` 是公共固定检查点，最终行与 `metrics.json` 使用完全相同的最终 F。
-`final_population.csv` 保存决策、目标值和 provenance。candidate/S2 的 `iemoec_diagnostics.csv` 还记录
+`final_population.csv` 保存决策、目标值和 provenance。candidate/S2/S3 的 `iemoec_diagnostics.csv` 还记录
 founder 多样性、合并唯一率、local/recombination 后代与存活率、方向覆盖率和每轮固定 FE 批次。
+S3 额外记录 isolated/shared/recombination 三类后代、存活率、方向改进、新方向数、
+方向记忆周转与停滞、受保护精英以及实际来源预算。
 主指标为 IGD+、HV，补充 GD+、pymoo Spacing、方向覆盖率和运行时间；历史默认不计算 HV。
 DTLZ7 与 WFG 使用固定随机状态的有界参考前沿生成，GD+/IGD+ 按批调用 pymoo 指标，避免
 高目标数或并行任务建立超大距离矩阵。
@@ -225,6 +251,8 @@ src/iemoec_experiment/
   initialization.py 公共初始决策向量
   normalization.py 单轮公共目标归一化
   directions.py 参考方向子集选择
+  directional_memory.py S3 持久方向微种群
+  source_budget.py S3 固定与贡献驱动 FE 分配
   metrics.py     公共参考 PF、归一化和指标
   iemoec.py      IEMOEC 自定义核心
   runner.py      单任务执行、检查点和标准结果输出
