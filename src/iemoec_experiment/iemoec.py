@@ -45,6 +45,8 @@ class IEMOECRunner:
         on_checkpoint: Callable[[int, Population], None] | None = None,
         on_outer_selection: Callable[[int, Population], dict | None] | None = None,
     ):
+        if case.iemoec.variant == "principle":
+            raise ValueError("Use PrincipleRunner for the closed-lineage principle variant")
         self.problem = problem
         self.case = case
         self.config = case.iemoec

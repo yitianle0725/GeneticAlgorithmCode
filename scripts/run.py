@@ -181,14 +181,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--iemoec-variant",
         choices=[
             "v0", "s1", "candidate", "s2", "s2_no_isolation",
-            "s3_memory", "s3_hybrid", "s3_elite", "s3",
+            "s3_memory", "s3_hybrid", "s3_elite", "s3", "principle",
         ],
         default="s2",
     )
     parser.add_argument(
         "--iemoec-survival",
         choices=["nsga3", "rank", "rank_crowding"],
-        default="nsga3",
+        default=None,
     )
     parser.add_argument("--iemoec-crowding", action="store_true")
     parser.add_argument("--no-recombination", action="store_true")
@@ -238,6 +238,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--inner-generations-early", type=int, default=1)
     parser.add_argument("--inner-generations-late", type=int, default=1)
     parser.add_argument("--partners-per-elite", type=int, default=2)
+    parser.add_argument("--principle-min-generations", type=int, default=3)
+    parser.add_argument("--principle-stagnation-generations", type=int, default=3)
+    parser.add_argument("--principle-probe-radius", type=float, default=0.01)
+    parser.add_argument("--principle-tolerance", type=float, default=1e-3)
     return parser
 
 
@@ -258,7 +262,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "inner_generations_early": args.inner_generations_early,
         "inner_generations_late": args.inner_generations_late,
         "partners_per_elite": args.partners_per_elite,
-        "outer_survival": args.iemoec_survival,
+        "outer_survival": args.iemoec_survival or "nsga3",
         "use_crowding": args.iemoec_crowding,
         "enable_recombination": not args.no_recombination,
         "recombination_budget_ratio": args.recombination_budget_ratio,
@@ -284,6 +288,26 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "pairing_strategy": args.pairing_strategy,
     }
     overrides.update({key: value for key, value in optional.items() if value is not None})
+    if args.iemoec_variant == "principle":
+        defaults = build_parser().parse_args([])
+        forbidden = list(optional) + [
+            "iemoec_survival", "iemoec_crowding", "no_recombination",
+            "retain_island_state", "fixed_island_definitions",
+            "inner_generations_early", "inner_generations_late",
+            "recombination_budget_ratio", "late_recombination_budget_ratio",
+            "partners_per_elite",
+        ]
+        for name in forbidden:
+            if getattr(args, name) != getattr(defaults, name):
+                raise ValueError(f"principle does not accept legacy option --{name.replace('_', '-')}")
+        overrides = {
+            "origin_ratio": args.origin_ratio,
+            "island_population": args.island_population,
+            "principle_min_generations": args.principle_min_generations,
+            "principle_stagnation_generations": args.principle_stagnation_generations,
+            "principle_probe_radius": args.principle_probe_radius,
+            "principle_tolerance": args.principle_tolerance,
+        }
     fixed_batch_variants = (
         "candidate", "s2", "s2_no_isolation",
         "s3_memory", "s3_hybrid", "s3_elite", "s3",

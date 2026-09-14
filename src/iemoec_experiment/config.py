@@ -33,6 +33,7 @@ IEMOEC_SCHEMA_VERSIONS = {
     "s3_hybrid": 6,
     "s3_elite": 7,
     "s3": 8,
+    "principle": 9,
 }
 S3_VARIANTS = ("s3_memory", "s3_hybrid", "s3_elite", "s3")
 S3_CONFIG_FIELDS = {
@@ -90,11 +91,23 @@ class IEMOECConfig:
     protect_direction_elites: bool = False
     adaptive_source_budget: bool = False
     source_budget_smoothing: float = 0.8
+    principle_min_generations: int = 3
+    principle_stagnation_generations: int = 3
+    principle_probe_radius: float = 0.01
+    principle_tolerance: float = 1e-3
 
     @classmethod
     def for_variant(cls, variant: str, **overrides) -> IEMOECConfig:
         """构造可复现的 V0、S1 或候选结构配置。"""
         profiles = {
+            "principle": {
+                "initialization_mode": "legacy_origin",
+                "normalization_mode": "legacy",
+                "min_origin": 2,
+                "island_initialization": "single_ancestor",
+                "outer_survival": "rank",
+                "pairing_strategy": "random",
+            },
             "v0": {
                 "initialization_mode": "legacy_origin",
                 "normalization_mode": "legacy",
@@ -242,6 +255,18 @@ class IEMOECConfig:
         return self.variant in S3_VARIANTS
 
     def validate(self) -> None:
+        if self.variant == "principle":
+            if not 0 < self.origin_ratio <= 1 or self.island_population < 2:
+                raise ValueError("principle requires origin_ratio in (0,1] and island_population >= 2")
+            if self.principle_min_generations < 1 or self.principle_stagnation_generations < 1:
+                raise ValueError("principle generation thresholds must be positive")
+            if not 0 < self.principle_probe_radius < 1 or not math.isfinite(self.principle_tolerance) or self.principle_tolerance < 0:
+                raise ValueError("invalid principle probe radius or tolerance")
+            if self.outer_survival != "rank" or self.use_crowding or not self.enable_recombination:
+                raise ValueError("principle requires rank-only survival, no CD, and recombination")
+            if self.island_initialization != "single_ancestor" or self.direction_memory or self.protect_direction_elites or self.adaptive_source_budget or self.shared_fe_ratio != 0:
+                raise ValueError("principle forbids multi-ancestor pools, shared breeding and direction archives")
+            return
         if self.variant not in IEMOEC_SCHEMA_VERSIONS:
             raise ValueError(
                 f"variant 必须属于 {sorted(IEMOEC_SCHEMA_VERSIONS)}"
@@ -461,6 +486,8 @@ class ExperimentCase:
     def algorithm_label(self) -> str:
         if self.normalized_algorithm != "IEMOEC":
             return ALGORITHM_LABELS[self.normalized_algorithm]
+        if self.iemoec.variant == "principle":
+            return "IEMOEC-Principle"
         base = {
             "rank": "IEMOEC-Rank",
             "rank_crowding": "IEMOEC-CD",
@@ -477,9 +504,16 @@ class ExperimentCase:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        principle_fields = [name for name in data["iemoec"] if name.startswith("principle_")]
+        if self.iemoec.variant != "principle":
+            for name in principle_fields:
+                data["iemoec"].pop(name)
+        else:
+            used = {"variant", "origin_ratio", "island_population", *principle_fields}
+            data["iemoec"] = {name: value for name, value in data["iemoec"].items() if name in used}
         if not self.iemoec.uses_s3_architecture:
             for field_name in S3_CONFIG_FIELDS:
-                data["iemoec"].pop(field_name)
+                data["iemoec"].pop(field_name, None)
         data["algorithm"] = self.normalized_algorithm
         data["problem"] = self.normalized_problem
         data["algorithm_variant"] = self.algorithm_variant

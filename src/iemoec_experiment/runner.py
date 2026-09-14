@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import json
 import os
 import time
@@ -13,6 +14,7 @@ from pymoo.optimize import minimize
 from .config import ExperimentCase
 from .factory import make_baseline, reference_directions
 from .iemoec import IEMOECRunner
+from .principle import PrincipleRunner
 from .initialization import initialization_hash, shared_initial_decisions
 from .metrics import METRIC_SCHEMA_VERSION, MetricSuite
 from .problems import make_problem
@@ -183,7 +185,10 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     _json_dump(config_path, case.to_dict())
     problem = make_problem(case.normalized_problem, case.n_obj, case.n_var)
     pop_size = len(reference_directions(case))
-    initial_X = shared_initial_decisions(problem, pop_size, case.seed)
+    initial_size = pop_size
+    if case.normalized_algorithm == "IEMOEC" and case.iemoec.variant == "principle":
+        initial_size = max(2, math.ceil(pop_size * case.iemoec.origin_ratio))
+    initial_X = shared_initial_decisions(problem, initial_size, case.seed)
     initial_hash = initialization_hash(initial_X)
     suite = MetricSuite(
         problem,
@@ -196,7 +201,8 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
 
     extra = {}
     if case.normalized_algorithm == "IEMOEC":
-        algorithm = IEMOECRunner(
+        runner_class = PrincipleRunner if case.iemoec.variant == "principle" else IEMOECRunner
+        algorithm = runner_class(
             problem,
             case,
             initial_X=initial_X,
@@ -240,6 +246,11 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         extra["shared_offspring_total"] = int(
             sum(row.get("shared_offspring", 0) for row in algorithm.outer_records)
         )
+        if case.iemoec.variant == "principle":
+            extra["initial_evaluations"] = algorithm.initial_evaluations
+            extra["termination_status"] = algorithm.termination_status
+            extra["extremum_certificate"] = "finite_neighborhood_test_not_mathematical_proof"
+            extra["combination_method"] = "coordinate_inheritance_then_mutation"
     else:
         algorithm, pop_size, _ = make_baseline(case, initial_X=initial_X)
         if case.max_fes < pop_size:
@@ -301,6 +312,8 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     _write_history(output_dir / "history.csv", history.rows)
     if case.normalized_algorithm == "IEMOEC":
         _write_history(output_dir / "iemoec_diagnostics.csv", algorithm.outer_records)
+        if case.iemoec.variant == "principle":
+            _write_history(output_dir / "lineage_audit.csv", algorithm.lineage_records)
     _write_population(output_dir / "final_population.csv", population)
     io_runtime = time.perf_counter() - io_started
     metrics["io_runtime_seconds"] = float(io_runtime)
