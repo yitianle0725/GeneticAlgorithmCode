@@ -102,6 +102,21 @@ class PrincipleTests(unittest.TestCase):
         self.assertFalse(lineage.qualified)
         self.assertEqual(runner.n_eval, 3)
 
+    def test_s4_uses_auditable_multiscale_probes(self):
+        runner = self.make_runner(BowlProblem())
+        runner.config = IEMOECConfig.for_variant(
+            "s4", origin_ratio=0.02, island_population=3,
+            principle_min_generations=1,
+        )
+        runner.ideal = np.zeros(3)
+        runner.scale = np.ones(3)
+        lineage = Lineage(0, runner._evaluate([[0.2, 0.2]], 0), np.ones(3) / 3)
+        runner._qualify(lineage, 1)
+        runner._qualify(lineage, 1)
+        checks = [row for row in runner.lineage_records if row["event"] == "qualification"]
+        self.assertEqual(checks[0]["probe_radius_ratio"], 0.01)
+        self.assertEqual(checks[1]["probe_radius_ratio"], 0.005)
+
     def test_coordinate_inheritance_before_mutation(self):
         runner = self.make_runner()
         runner._mutate = lambda X: np.asarray(X).copy()
@@ -155,6 +170,47 @@ class PrincipleTests(unittest.TestCase):
             self.assertTrue((case.output_dir / "lineage_audit.csv").exists())
             config = json.loads((case.output_dir / "config.json").read_text(encoding="utf-8"))
             self.assertNotIn("outer_survival", config["iemoec"])
+
+    def test_s4_combines_as_soon_as_two_extrema_qualify(self):
+        runner = self.make_runner()
+        runner.config = IEMOECConfig.for_variant(
+            "s4", origin_ratio=0.02, island_population=3,
+            principle_min_generations=1,
+        )
+        population, _ = runner.run()
+        self.assertEqual(runner.n_eval, 200)
+        self.assertGreater(runner.global_selection_count, 0)
+        self.assertTrue(any(
+            record["event"] == "extreme_combination"
+            for record in runner.lineage_records
+        ))
+
+    def test_s4_cli_uses_new_schema(self):
+        args = build_parser().parse_args([
+            "--preset", "smoke", "--algorithms", "IEMOEC",
+            "--iemoec-variant", "s4",
+        ])
+        case = resolve_cases(args)[0]
+        case.validate()
+        self.assertEqual(case.algorithm_schema_version, 10)
+        self.assertEqual(case.algorithm_label, "IEMOEC-S4")
+
+    def test_s4_global_batches_are_complete(self):
+        runner = self.make_runner(budget=200)
+        runner.config = IEMOECConfig.for_variant(
+            "s4", origin_ratio=0.02, island_population=3,
+            principle_min_generations=1,
+        )
+        runner.run()
+        combined = [
+            row for row in runner.outer_records
+            if row["recombination_offspring"]
+        ]
+        self.assertTrue(combined)
+        self.assertTrue(all(
+            row["recombination_offspring"] == runner.pop_size
+            for row in combined
+        ))
 
 
 if __name__ == "__main__":

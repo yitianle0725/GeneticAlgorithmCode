@@ -186,7 +186,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     problem = make_problem(case.normalized_problem, case.n_obj, case.n_var)
     pop_size = len(reference_directions(case))
     initial_size = pop_size
-    if case.normalized_algorithm == "IEMOEC" and case.iemoec.variant == "principle":
+    if case.normalized_algorithm == "IEMOEC" and case.iemoec.variant in ("principle", "s4"):
         initial_size = max(2, math.ceil(pop_size * case.iemoec.origin_ratio))
     initial_X = shared_initial_decisions(problem, initial_size, case.seed)
     initial_hash = initialization_hash(initial_X)
@@ -201,7 +201,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
 
     extra = {}
     if case.normalized_algorithm == "IEMOEC":
-        runner_class = PrincipleRunner if case.iemoec.variant == "principle" else IEMOECRunner
+        runner_class = PrincipleRunner if case.iemoec.variant in ("principle", "s4") else IEMOECRunner
         algorithm = runner_class(
             problem,
             case,
@@ -246,7 +246,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         extra["shared_offspring_total"] = int(
             sum(row.get("shared_offspring", 0) for row in algorithm.outer_records)
         )
-        if case.iemoec.variant == "principle":
+        if case.iemoec.variant in ("principle", "s4"):
             extra["initial_evaluations"] = algorithm.initial_evaluations
             extra["termination_status"] = algorithm.termination_status
             extra["extremum_certificate"] = "finite_neighborhood_test_not_mathematical_proof"
@@ -312,7 +312,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     _write_history(output_dir / "history.csv", history.rows)
     if case.normalized_algorithm == "IEMOEC":
         _write_history(output_dir / "iemoec_diagnostics.csv", algorithm.outer_records)
-        if case.iemoec.variant == "principle":
+        if case.iemoec.variant in ("principle", "s4"):
             _write_history(output_dir / "lineage_audit.csv", algorithm.lineage_records)
     _write_population(output_dir / "final_population.csv", population)
     io_runtime = time.perf_counter() - io_started

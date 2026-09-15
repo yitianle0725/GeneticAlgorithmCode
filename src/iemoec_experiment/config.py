@@ -34,6 +34,7 @@ IEMOEC_SCHEMA_VERSIONS = {
     "s3_elite": 7,
     "s3": 8,
     "principle": 9,
+    "s4": 10,
 }
 S3_VARIANTS = ("s3_memory", "s3_hybrid", "s3_elite", "s3")
 S3_CONFIG_FIELDS = {
@@ -101,6 +102,14 @@ class IEMOECConfig:
         """构造可复现的 V0、S1 或候选结构配置。"""
         profiles = {
             "principle": {
+                "initialization_mode": "legacy_origin",
+                "normalization_mode": "legacy",
+                "min_origin": 2,
+                "island_initialization": "single_ancestor",
+                "outer_survival": "rank",
+                "pairing_strategy": "random",
+            },
+            "s4": {
                 "initialization_mode": "legacy_origin",
                 "normalization_mode": "legacy",
                 "min_origin": 2,
@@ -255,7 +264,7 @@ class IEMOECConfig:
         return self.variant in S3_VARIANTS
 
     def validate(self) -> None:
-        if self.variant == "principle":
+        if self.variant in ("principle", "s4"):
             if not 0 < self.origin_ratio <= 1 or self.island_population < 2:
                 raise ValueError("principle requires origin_ratio in (0,1] and island_population >= 2")
             if self.principle_min_generations < 1 or self.principle_stagnation_generations < 1:
@@ -486,8 +495,8 @@ class ExperimentCase:
     def algorithm_label(self) -> str:
         if self.normalized_algorithm != "IEMOEC":
             return ALGORITHM_LABELS[self.normalized_algorithm]
-        if self.iemoec.variant == "principle":
-            return "IEMOEC-Principle"
+        if self.iemoec.variant in ("principle", "s4"):
+            return "IEMOEC-Principle" if self.iemoec.variant == "principle" else "IEMOEC-S4"
         base = {
             "rank": "IEMOEC-Rank",
             "rank_crowding": "IEMOEC-CD",
@@ -505,7 +514,7 @@ class ExperimentCase:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         principle_fields = [name for name in data["iemoec"] if name.startswith("principle_")]
-        if self.iemoec.variant != "principle":
+        if self.iemoec.variant not in ("principle", "s4"):
             for name in principle_fields:
                 data["iemoec"].pop(name)
         else:

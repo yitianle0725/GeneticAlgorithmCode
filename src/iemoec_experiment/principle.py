@@ -26,6 +26,7 @@ class Lineage:
     generations: int = 0
     stagnant: int = 0
     qualified: bool = False
+    qualification_attempts: int = 0
 
 
 class PrincipleRunner:
@@ -133,11 +134,13 @@ class PrincipleRunner:
                                                  foreign_parent_count=0, fe=self.n_eval))
         return lineages
 
-    def _local_generation(self, lineage, round_id):
+    def _local_generation(self, lineage, round_id, reserve=0):
         if not np.all(lineage.population.get("lineage_id") == lineage.identity):
             raise RuntimeError("foreign individual entered a closed lineage")
         old = float(np.min(self._scores(lineage.population, lineage.weight)))
-        size = min(self.config.island_population, self.remaining)
+        size = min(self.config.island_population, max(0, self.remaining - reserve))
+        if size == 0:
+            return
         parents = []
         scores = self._scores(lineage.population, lineage.weight)
         for _ in range(2 * math.ceil(size / 2)):
@@ -157,10 +160,13 @@ class PrincipleRunner:
                                          best_score=new, generations=lineage.generations,
                                          stagnant=lineage.stagnant))
 
-    def _qualify(self, lineage, round_id):
+    def _qualify(self, lineage, round_id, reserve=0):
         best = self._best(lineage)
         x = best.get("X")
-        radius = self.config.principle_probe_radius * (self.problem.xu - self.problem.xl)
+        radius_ratio = self.config.principle_probe_radius
+        if self.config.variant == "s4":
+            radius_ratio *= max(0.125, 0.5 ** lineage.qualification_attempts)
+        radius = radius_ratio * (self.problem.xu - self.problem.xl)
         probes = []
         for j in range(self.problem.n_var):
             for sign in (-1, 1):
@@ -175,18 +181,22 @@ class PrincipleRunner:
             if not np.array_equal(trial, x):
                 probes.append(trial)
         old = float(self._scores(Population.create(best), lineage.weight)[0])
-        tested = self._evaluate(probes, lineage.identity)
+        available = max(0, self.remaining - reserve)
+        tested = self._evaluate(probes[:available], lineage.identity)
         improved = bool(len(tested) and np.min(self._scores(tested, lineage.weight)) < old - self.config.principle_tolerance)
         complete = len(tested) == len(probes) and bool(probes)
         self._keep_local(lineage, tested)
         lineage.qualified = complete and not improved
+        lineage.qualification_attempts += 1
         if improved:
             lineage.stagnant = 0
         self.lineage_records.append(dict(round=round_id, lineage=lineage.identity,
                                          event="qualification", evaluations=len(tested),
                                          foreign_parent_count=0, fe=self.n_eval,
                                          probe_complete=complete, probe_improved=improved,
-                                         qualified=lineage.qualified))
+                                         qualified=lineage.qualified,
+                                         probe_radius_ratio=radius_ratio,
+                                         qualification_attempt=lineage.qualification_attempts))
 
     def _combine(self, representatives, lineage_ids, round_id=0):
         X = representatives.get("X")
@@ -238,16 +248,10 @@ class PrincipleRunner:
             start = self.n_eval
             lineages = self._new_lineages(founders, round_id)
             expansion_end = self.n_eval
-            while self.remaining and not all(l.qualified for l in lineages):
-                for lineage in lineages:
-                    if not self.remaining:
-                        break
-                    if lineage.qualified:
-                        continue
-                    self._local_generation(lineage, round_id)
-                    if (self.remaining and lineage.generations >= self.config.principle_min_generations
-                            and lineage.stagnant >= self.config.principle_stagnation_generations):
-                        self._qualify(lineage, round_id)
+            if self.config.variant == "principle":
+                self._run_legacy_qualification(lineages, round_id)
+            else:
+                self._run_s4_qualification(lineages, round_id)
             local_end = self.n_eval
             qualified = [l for l in lineages if l.qualified]
             distinct = []
@@ -258,7 +262,7 @@ class PrincipleRunner:
                     seen.add(key)
                     distinct.append(lineage)
             mixed = Population.empty()
-            if self.remaining and len(distinct) >= 2:
+            if self.remaining >= self.pop_size and len(distinct) >= 2:
                 representatives = Population.create(*[self._best(l).copy() for l in distinct])
                 mixed = self._combine(representatives, [l.identity for l in distinct], round_id)
             if len(mixed):
@@ -278,7 +282,11 @@ class PrincipleRunner:
                         lineage.qualified = False
                         self._local_generation(lineage, round_id)
                 local_end = self.n_eval
-                self.termination_status = "budget_exhausted_without_global_combination"
+                self.termination_status = (
+                    "completed_then_budget_exhausted_local"
+                    if self.global_selection_count
+                    else "budget_exhausted_without_global_combination"
+                )
             self.outer_records.append(dict(outer_iteration=round_id, fe_start=start,
                                            fe_end=self.n_eval, founder_count=len(lineages),
                                            qualified_parent_count=len(qualified),
@@ -290,3 +298,38 @@ class PrincipleRunner:
                                            isolation_violations=0,
                                            status=self.termination_status))
         return self.candidate_pool, round_id
+
+    def _run_legacy_qualification(self, lineages, round_id):
+        """Preserve schema-9 behavior so completed results stay reproducible."""
+        while self.remaining and not all(lineage.qualified for lineage in lineages):
+            for lineage in lineages:
+                if not self.remaining:
+                    break
+                if lineage.qualified:
+                    continue
+                self._local_generation(lineage, round_id)
+                if (self.remaining
+                        and lineage.generations >= self.config.principle_min_generations
+                        and lineage.stagnant >= self.config.principle_stagnation_generations):
+                    self._qualify(lineage, round_id)
+
+    def _run_s4_qualification(self, lineages, round_id):
+        """Stop when two distinct qualified extrema can form mixed offspring."""
+        reserve = self.pop_size
+        while self.remaining > reserve:
+            for lineage in lineages:
+                if lineage.qualified:
+                    continue
+                for _ in range(self.config.principle_min_generations):
+                    if self.remaining <= reserve:
+                        return
+                    self._local_generation(lineage, round_id, reserve)
+                if self.remaining > reserve:
+                    self._qualify(lineage, round_id, reserve)
+            qualified = [lineage for lineage in lineages if lineage.qualified]
+            distinct = {
+                np.asarray(self._best(lineage).get("X"), dtype=np.float64).tobytes()
+                for lineage in qualified
+            }
+            if len(distinct) >= 2:
+                return

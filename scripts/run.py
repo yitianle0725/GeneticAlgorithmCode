@@ -181,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--iemoec-variant",
         choices=[
             "v0", "s1", "candidate", "s2", "s2_no_isolation",
-            "s3_memory", "s3_hybrid", "s3_elite", "s3", "principle",
+            "s3_memory", "s3_hybrid", "s3_elite", "s3", "principle", "s4",
         ],
         default="s2",
     )
@@ -288,7 +288,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "pairing_strategy": args.pairing_strategy,
     }
     overrides.update({key: value for key, value in optional.items() if value is not None})
-    if args.iemoec_variant == "principle":
+    if args.iemoec_variant in ("principle", "s4"):
         defaults = build_parser().parse_args([])
         forbidden = list(optional) + [
             "iemoec_survival", "iemoec_crowding", "no_recombination",
