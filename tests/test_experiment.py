@@ -473,9 +473,15 @@ class RunnerTests(unittest.TestCase):
         }
         pools = memory.parent_pools()
         identities = [id(individual) for pool in pools for individual in pool]
+        pools[0][0].get("X")[0] = -1.0
+        after_external_mutation = {
+            IEMOECRunner._x_key(individual.get("X"))
+            for individual in memory.combined_population()
+        }
 
         self.assertTrue(before & after)
         self.assertEqual(len(identities), len(set(identities)))
+        self.assertEqual(after_external_mutation, after)
 
     def test_s3_variants_obey_budget_and_write_diagnostics(self):
         for variant in ("s3_memory", "s3_hybrid", "s3_elite", "s3"):

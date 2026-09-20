@@ -50,23 +50,50 @@ class DirectionalMemory:
         ).tobytes()
 
     @staticmethod
-    def _copy_population(population: Population) -> Population:
+    def _copy_individual(individual):
+        """复制会被算法修改的个体状态，避免昂贵的递归深拷贝。
+
+        pymoo 个体的 ``config`` 只保存约束计算规则，可以安全共享；决策、
+        目标等数组以及 ``data`` 和 ``evaluated`` 则必须独立。
+        """
+        copied = individual.copy(deep=False)
+        for name, value in individual.__dict__.items():
+            if isinstance(value, np.ndarray):
+                copied.__dict__[name] = value.copy()
+            elif name == "data":
+                copied.__dict__[name] = {
+                    key: item.copy() if isinstance(item, np.ndarray) else item
+                    for key, item in value.items()
+                }
+            elif name == "evaluated":
+                copied.__dict__[name] = value.copy()
+        return copied
+
+    @classmethod
+    def _copy_population(cls, population: Population) -> Population:
         if not len(population):
             return Population.empty()
-        return Population.create(*(individual.copy() for individual in population))
+        return Population.create(
+            *(cls._copy_individual(individual) for individual in population)
+        )
 
     def _deduplicate(self, population: Population) -> Population:
-        selected = []
+        selected_indices = []
         seen: set[bytes] = set()
-        for individual in population:
-            key = self._key(individual)
+        for index, key in enumerate(self._population_keys(population)):
             if key in seen:
                 continue
             seen.add(key)
-            selected.append(individual)
-        if not selected:
+            selected_indices.append(index)
+        if not selected_indices:
             return Population.empty()
-        return Population.create(*selected)
+        return population[np.asarray(selected_indices, dtype=int)]
+
+    @staticmethod
+    def _population_keys(population: Population) -> list[bytes]:
+        """一次提取种群决策键，避免逐个 Individual 重复查询属性。"""
+        decisions = np.asarray(population.get("X"), dtype=np.float64)
+        return [np.ascontiguousarray(row).tobytes() for row in decisions]
 
     def _normalized_decisions(self, population: Population) -> np.ndarray:
         decisions = np.asarray(population.get("X"), dtype=float)
@@ -74,43 +101,99 @@ class DirectionalMemory:
         upper = np.asarray(self.problem.xu, dtype=float)
         return (decisions - lower) / np.maximum(upper - lower, 1e-12)
 
-    def _select_for_direction(
+    def _select_from_cached_candidates(
         self,
-        population: Population,
+        previous: Population,
+        previous_keys: list[bytes],
+        candidates: Population,
+        candidate_keys: list[bytes],
+        normalized_candidate_objectives: np.ndarray,
+        candidate_decisions: np.ndarray,
         weight: np.ndarray,
         normalization: ObjectiveNormalization,
-    ) -> Population:
-        unique = self._deduplicate(population)
-        if len(unique) <= self.capacity:
-            return self._copy_population(unique)
+    ) -> tuple[Population, float, float | None]:
+        """从缓存候选数据更新一个方向，并返回其最优标量值。
 
-        scores = normalization.tchebycheff(unique.get("F"), weight)
-        ordered = np.argsort(scores, kind="stable")
-        shortlist_size = min(len(unique), max(self.capacity * 3, self.capacity))
-        shortlist = ordered[:shortlist_size]
-        normalized_x = self._normalized_decisions(unique)
+        逻辑顺序与 ``deduplicate(merge(previous, candidates))`` 完全一致：
+        先放旧记忆，再依次放尚未出现的候选。保持这个顺序可确保标量值
+        相同时，稳定排序仍选择与旧实现相同的个体。
+        """
+        previous_key_set = set(previous_keys)
+        new_candidate_indices = np.asarray(
+            [
+                index
+                for index, key in enumerate(candidate_keys)
+                if key not in previous_key_set
+            ],
+            dtype=int,
+        )
 
-        selected = [int(ordered[0])]
-        while len(selected) < self.capacity:
-            available = np.asarray(
-                [index for index in shortlist if int(index) not in selected],
-                dtype=int,
+        previous_count = len(previous)
+        if previous_count:
+            normalized_objectives = np.concatenate(
+                [
+                    normalization.apply(previous.get("F")),
+                    normalized_candidate_objectives[new_candidate_indices],
+                ],
+                axis=0,
             )
-            if len(available) == 0:
+            decisions = np.concatenate(
+                [
+                    self._normalized_decisions(previous),
+                    candidate_decisions[new_candidate_indices],
+                ],
+                axis=0,
+            )
+        else:
+            normalized_objectives = normalized_candidate_objectives
+            decisions = candidate_decisions
+
+        scores = np.max(
+            np.asarray(weight, dtype=float) * np.abs(normalized_objectives),
+            axis=1,
+        )
+        previous_best = (
+            float(np.min(scores[:previous_count]))
+            if previous_count
+            else None
+        )
+        if len(scores) <= self.capacity:
+            selected = np.arange(len(scores), dtype=int)
+        else:
+            ordered = np.argsort(scores, kind="stable")
+            shortlist_size = min(len(ordered), self.capacity * 3)
+            shortlist = ordered[:shortlist_size]
+            chosen = [int(ordered[0])]
+            while len(chosen) < self.capacity:
                 available = np.asarray(
-                    [index for index in ordered if int(index) not in selected],
+                    [index for index in shortlist if int(index) not in chosen],
                     dtype=int,
                 )
-            distances = np.linalg.norm(
-                normalized_x[available, None, :]
-                - normalized_x[np.asarray(selected, dtype=int)][None, :, :],
-                axis=2,
-            )
-            min_distances = np.min(distances, axis=1)
-            selected.append(int(available[int(np.argmax(min_distances))]))
+                if len(available) == 0:
+                    available = np.asarray(
+                        [index for index in ordered if int(index) not in chosen],
+                        dtype=int,
+                    )
+                distances = np.linalg.norm(
+                    decisions[available, None, :]
+                    - decisions[np.asarray(chosen, dtype=int)][None, :, :],
+                    axis=2,
+                )
+                min_distances = np.min(distances, axis=1)
+                chosen.append(int(available[int(np.argmax(min_distances))]))
+            selected = np.asarray(chosen, dtype=int)
 
-        chosen = unique[np.asarray(selected, dtype=int)]
-        return self._copy_population(chosen)
+        selected_individuals = []
+        for index in selected:
+            if index < previous_count:
+                selected_individuals.append(previous[int(index)])
+            else:
+                candidate_index = new_candidate_indices[int(index) - previous_count]
+                selected_individuals.append(candidates[int(candidate_index)])
+        updated = Population.create(
+            *(self._copy_individual(individual) for individual in selected_individuals)
+        )
+        return updated, float(np.min(scores[selected])), previous_best
 
     def update(
         self,
@@ -121,33 +204,37 @@ class DirectionalMemory:
         if not len(candidates):
             raise ValueError("不能用空候选集更新方向记忆")
 
+        unique_candidates = self._deduplicate(candidates)
+        candidate_keys = self._population_keys(unique_candidates)
+        normalized_candidate_objectives = normalization.apply(
+            unique_candidates.get("F")
+        )
+        candidate_decisions = self._normalized_decisions(unique_candidates)
+
         turnovers = []
         for direction_id, weight in enumerate(self.weights):
             previous = self._populations[direction_id]
-            previous_keys = {self._key(individual) for individual in previous}
-            combined = candidates
-            if len(previous):
-                combined = Population.merge(previous, candidates)
+            previous_keys = self._population_keys(previous)
+            previous_key_set = set(previous_keys)
 
-            previous_best = None
-            if len(previous):
-                previous_best = float(np.min(normalization.tchebycheff(
-                    previous.get("F"),
-                    weight,
-                )))
-            updated = self._select_for_direction(combined, weight, normalization)
-            updated_best = float(np.min(normalization.tchebycheff(
-                updated.get("F"),
+            updated, updated_best, previous_best = self._select_from_cached_candidates(
+                previous,
+                previous_keys,
+                unique_candidates,
+                candidate_keys,
+                normalized_candidate_objectives,
+                candidate_decisions,
                 weight,
-            )))
+                normalization,
+            )
             if previous_best is None or updated_best < previous_best - 1e-12:
                 self._stagnation[direction_id] = 0
             else:
                 self._stagnation[direction_id] += 1
 
             introduced = sum(
-                self._key(individual) not in previous_keys
-                for individual in updated
+                key not in previous_key_set
+                for key in self._population_keys(updated)
             )
             turnovers.append(introduced / max(1, len(updated)))
             self._populations[direction_id] = updated
@@ -170,14 +257,24 @@ class DirectionalMemory:
         selected = []
         for population, weight in zip(self._populations, self.weights):
             scores = normalization.tchebycheff(population.get("F"), weight)
-            selected.append(population[int(np.argmin(scores))].copy())
+            selected.append(
+                self._copy_individual(population[int(np.argmin(scores))])
+            )
         return Population.create(*selected)
 
     def combined_population(self) -> Population:
         """返回全部方向记忆的决策去重副本。"""
-        merged = Population.empty()
+        selected = []
+        seen: set[bytes] = set()
         for population in self._populations:
-            copied = self._copy_population(population)
-            merged = copied if not len(merged) else Population.merge(merged, copied)
-        return self._copy_population(self._deduplicate(merged))
-
+            for individual, key in zip(
+                population,
+                self._population_keys(population),
+            ):
+                if key in seen:
+                    continue
+                seen.add(key)
+                selected.append(self._copy_individual(individual))
+        if not selected:
+            return Population.empty()
+        return Population.create(*selected)

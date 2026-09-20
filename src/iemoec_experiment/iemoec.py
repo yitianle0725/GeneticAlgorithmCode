@@ -870,24 +870,24 @@ class IEMOECRunner:
     ) -> float:
         if not len(offspring) or not len(representatives):
             return 0.0
-        representative_scores = np.asarray([
-            normalization.tchebycheff(
-                representatives[i:i + 1].get("F"),
-                weight,
-            )[0]
-            for i, weight in enumerate(weights[:len(representatives)])
-        ])
-        improved = 0
-        for child in offspring:
-            child_scores = np.asarray([
-                normalization.tchebycheff(
-                    np.asarray(child.get("F"), dtype=float)[None, :],
-                    weight,
-                )[0]
-                for weight in weights[:len(representatives)]
-            ])
-            improved += int(np.any(child_scores < representative_scores - 1e-12))
-        return improved / len(offspring)
+        active_weights = np.asarray(weights[:len(representatives)], dtype=float)
+        representative_values = np.abs(
+            normalization.apply(representatives.get("F"))
+        )
+        representative_scores = np.max(
+            representative_values * active_weights,
+            axis=1,
+        )
+        offspring_values = np.abs(normalization.apply(offspring.get("F")))
+        offspring_scores = np.max(
+            offspring_values[:, None, :] * active_weights[None, :, :],
+            axis=2,
+        )
+        improved = np.any(
+            offspring_scores < representative_scores[None, :] - 1e-12,
+            axis=1,
+        )
+        return float(np.mean(improved))
 
     def _assigned_reference_directions(
         self,
@@ -929,14 +929,19 @@ class IEMOECRunner:
         if not eligible_fronts:
             return Population.empty()
         eligible = np.concatenate(eligible_fronts).astype(int, copy=False)
+        active_weights = np.asarray(weights, dtype=float)
+        eligible_values = np.abs(
+            normalization.apply(population[eligible].get("F"))
+        )
+        scores = np.max(
+            eligible_values[:, None, :] * active_weights[None, :, :],
+            axis=2,
+        )
+        best_indices = np.argmin(scores, axis=0)
         selected = []
         seen: set[bytes] = set()
-        for weight in weights:
-            scores = normalization.tchebycheff(
-                population[eligible].get("F"),
-                weight,
-            )
-            individual = population[int(eligible[int(np.argmin(scores))])]
+        for best_index in best_indices:
+            individual = population[int(eligible[int(best_index)])]
             key = self._x_key(individual.get("X"))
             if key in seen:
                 continue
