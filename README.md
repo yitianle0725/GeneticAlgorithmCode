@@ -1,272 +1,415 @@
-# IEMOEC 实验平台
+# IEMOEC：可复现的多目标进化优化实验平台
 
-本项目已重构为基于 **pymoo 0.6.2** 的可复现多目标/多目标数优化实验平台。
+本项目基于 **Python 3.12+** 与 **pymoo 0.6.2**，用于研究和验证多目标极值组合算法
+IEMOEC（Independent Evolution and Multi-objective Extremum Combination）。代码库同时提供
+NSGA-II、NSGA-III、MOEA/D-TCH、MOEA/D-PBI、RVEA 和 AGE-MOEA2-Stable 等公共基线，
+统一问题、初始化、种群规模、函数评价预算、指标和统计流程。
 
-## 设计原则
+截至 2026-09-21，项目已经完成：
 
-- NSGA-II、NSGA-III、MOEA/D-TCH、MOEA/D-PBI、RVEA、AGE-MOEA2、DTLZ、WFG、SBX、多项式变异、非支配排序和质量指标直接使用 pymoo。
-- 所有算法在相同问题与目标数下共享种群规模，并严格使用相同 `MaxFEs`。
-- 每个 problem、目标数和 seed 使用同一份缓存 `X_init`；candidate/S2 会先评价完整 N，再构造 origin。
-- 正式实验不使用 HV/IGD 早停，不提供 IEMOEC 专属的额外 PF 扩展。
-- 低维（M≤5）计算精确 HV；高维使用固定公共采样点的 Monte Carlo HV。
-- 运行时只在固定 FE 检查点记录历史；默认仅最终计算 HV。
-- 每个独立任务可并行运行、自动跳过已完成配置、记录失败任务并单独重跑。
+- 7 种算法、16 个 DTLZ/WFG 问题、5 个目标数、30 seeds、`400N` FE 的正式实验；
+- `16800/16800` 个正式任务成功，0 failures；
+- S2、S3-Memory、S3-Hybrid、S3-Elite 及核心机制消融；
+- 忠实实现原始思想的独立 S4 原理验证版本（algorithm schema 10）；
+- S3-Elite 运行热点优化，以及 2400 项单线程干净计时实验。
 
-## 环境
+当前应区分两条研究线：
+
+- **S3-Elite**：当前性能版本，用于与现有 many-objective 算法进行正式比较。
+- **S4**：原理验证版本，用于审计“亲本选择、极值组合、独立进化”是否按原始文字实现；
+  它不是 S3-Elite 的性能升级版。
+
+## 1. 当前实验结论
+
+### 1.1 S3-Elite 的正式表现
+
+正式实验覆盖 DTLZ1–7、WFG1–9，`M=3/5/8/10/15`，每场景 30 seeds。
+按 80 个“问题 × 目标数”场景的 IGD+ 中位数排名：
+
+| 算法 | 平均排名 | 场景第一数 |
+|---|---:|---:|
+| RVEA | **2.700** | **29/80** |
+| S3-Elite | **3.125** | 11/80 |
+| NSGA-III | 3.150 | 7/80 |
+| AGE-MOEA2-Stable | 3.462 | 11/80 |
+| MOEA/D-PBI | 4.212 | 17/80 |
+| NSGA-II | 5.662 | 2/80 |
+| MOEA/D-TCH | 5.688 | 3/80 |
+
+Friedman 检验为 `χ²=156.41, p≈3.4×10⁻³¹`。合理结论是：
+
+> S3-Elite 具有明确竞争力，综合排名第二，与 NSGA-III 接近；它明显优于 NSGA-II 和
+> MOEA/D-TCH，对 AGE-MOEA2-Stable、MOEA/D-PBI 总体占优，但尚未整体超过 RVEA。
+
+S3-Elite 在 DTLZ5/6/7、WFG3/4 上表现突出；主要弱项是 DTLZ1–4、WFG6/9、M=3，
+以及相对 NSGA-III、RVEA 不足的全局方向覆盖。完整分析见
+[第二次 formal 实验报告](docs/第二次formal实验0920.md)。
+
+### 1.2 运行效率优化
+
+方向记忆候选缓存、批量方向标量化、向量化诊断和轻量个体复制已经实现，且未改变算法语义。
+优化后的 `timing_optimized_s3_elite`：
+
+- `2400/2400` 成功，0 failures；
+- 与优化前正式结果逐任务比较，IGD+、GD+、HV、Spacing、方向覆盖等指标完全一致；
+- 相对旧 formal 记录，算法累计时间由 `124.12 h` 降至 `39.80 h`；
+- 与旧单线程干净计时的 27 个公共场景比较，单位 FE 几何平均加速约 `1.42×`，
+  即单位 FE 耗时约下降 `29.8%`。
+
+旧 formal 包含历史指标回调并可能存在多进程资源竞争，因此不能把 formal 记录中的约 3 倍差距
+全部解释为代码优化。论文报告算法时间时，应使用 `--workers 1 --timing-only` 的干净计时结果。
+
+### 1.3 三个研究问题目前的证据
+
+| 研究问题 | 当前证据 | 当前判断 |
+|---|---|---|
+| 独立进化能否替代 Crowding Distance？ | S2、NoIsolation 及 A–I 控制实验 | 尚不能证明普遍替代；隔离与共享在部分总体结果上近似 |
+| 极值组合是否改善全局探索？ | NoRecombination、不同 pairing、来源贡献与 HV | 重组对覆盖/HV 有积极证据，但不是普遍的 IGD+ 改善 |
+| 独立子种群是否缓解 many-objective 选择压力？ | M=8/10/15、方向覆盖、S3 方向记忆实验 | 部分困难前沿有效，但 M15 和规则前沿仍不稳定 |
+
+因此，现阶段可以主张“机制具有研究价值并形成有竞争力的算法”，不能主张三个问题都已被肯定证明，
+也不能主张 S3-Elite 普遍优于全部强基线。
+
+## 2. 环境安装
+
+推荐使用独立 Conda 环境：
 
 ```powershell
+conda create -n moo python=3.12
 conda activate moo
+python -m pip install -r requirement.txt
 python -c "import pymoo; print(pymoo.__version__)"
 ```
 
-所需包记录在 `requirement.txt`。当前代码面向 `pymoo>=0.6.2,<0.7`。
-AGE-MOEA2 还需要 `numba>=0.59`；运行扩展基线前请先执行
-`python -m pip install -r requirement.txt`。
+主要依赖包括 NumPy、SciPy、Matplotlib、pymoo、Numba 和 Pydantic。
+项目要求 `pymoo>=0.6.2,<0.7`；AGE-MOEA2 需要 `numba>=0.59`。
 
-## 实验层级
-
-### 1. 正确性冒烟测试
-
-DTLZ2、M=3、1 个种子、4 个算法，预算为 20 倍共同种群大小：
-
-```powershell
-python scripts/run.py --preset smoke --workers 4
-```
-
-### 2. 预实验
-
-DTLZ1–4、M=3/5/10、5 个种子：
-
-```powershell
-python scripts/run.py --preset pilot --workers 6
-```
-
-### 3. 结构实验清单
-
-DTLZ2/3/4/7、WFG1/2/4/9，M=3/5/10，5 个种子。首先只审核任务：
-
-```powershell
-python scripts/run.py --preset structure --iemoec-variant candidate --dry-run
-```
-
-### 4. 扩展基线预实验
-
-`benchmark_smoke` 使用 DTLZ2、M=3、seed=1 检查全部 7 个算法，共 7 项：
-
-```powershell
-python scripts/run.py --preset benchmark_smoke --iemoec-variant s2 --workers 4
-```
-
-`benchmark_pilot` 覆盖 DTLZ1–7、WFG1–9、M=3/5/10、seed=1–5 和全部 7 个算法，
-共 1680 项。先检查任务清单：
-
-```powershell
-python scripts/run.py --preset benchmark_pilot --iemoec-variant s2 --workers 4 --dry-run
-```
-
-确认 smoke 成功后再运行：
-
-```powershell
-python scripts/run.py --preset benchmark_pilot --iemoec-variant s2 --workers 4
-```
-
-其中 `MOEAD` 表示 Tchebycheff 分解，`MOEADPBI` 表示 `PBI(theta=5.0)`。
-
-### 5. S3 顺序消融
-
-S3 开发集包含 10 个代表问题、M=8/15 和 seeds=1–5，每个版本 100 项。
-先验证持久方向记忆：
-
-```powershell
-python scripts/run.py --preset s3_development --iemoec-variant s3_memory `
-  --workers 4 --run-name s3_memory_m8_m15 --dry-run
-```
-
-确认任务数后去掉 `--dry-run`。只有当前版本达到预设门槛，才依次运行
-`s3_hybrid`、`s3_elite` 和 `s3`，不要并行启动全部消融。
-
-### 6. 正式实验
-
-DTLZ1–7、WFG1–9、M=3/5/8/10/15、30 个种子，共 16800 项：
-
-```powershell
-python scripts/run.py --preset formal --iemoec-variant s2 --workers 4
-```
-
-当前不要启动该批次。应先完成 S3 顺序消融、高维 pilot、低中维回归并冻结算法。
-正式运行仅使用任务级并行，不要同时开启岛级多进程。
-
-## 自定义实验
-
-推荐用 `--evals-per-pop` 定义预算，它会自动得到各目标数下与共同种群规模整除的 `MaxFEs`：
-
-```powershell
-python scripts/run.py --preset custom `
-  --algorithms NSGA2 NSGA3 MOEAD IEMOEC `
-  --problems dtlz2 wfg1 `
-  --objectives 3,5,10 `
-  --seeds 1-5 `
-  --evals-per-pop 200 `
-  --workers 4 `
-  --run-name my_pilot
-```
-
-也可显式传入 `--max-fes`，但它必须是每个目标数对应共同种群大小的整数倍。这样 pymoo 的代际 NSGA-II/III 与 MOEA/D 都能精确停在同一 FE。
-
-常用参数：
-
-- `--dry-run`：只展示任务，不执行。
-- `--force`：重新运行完全相同的配置；任何配置差异都必须更换 `--run-name`。
-- `--history-hv`：在历史检查点计算 HV；高维时不建议启用。
-- `--run-name`：固定结果批次名，用于断点续跑。
-- `--iemoec-variant`：选择旧版、S2 消融或 `s3_memory`、`s3_hybrid`、`s3_elite`、`s3`；统一 CLI 默认 `s2`。
-- `--iemoec-survival`：选择 `rank`、`rank_crowding` 或 `nsga3`。
-- `--iemoec-crowding`：启用拥挤度，供消融实验使用。
-- `--no-recombination`：关闭跨岛组合，供消融实验使用。
-- `--recombination-budget-ratio`：聚合阶段的重组预算比例，默认为 1.0。
-- `--late-recombination-budget-ratio`：Pareto 阶段的重组预算比例，默认为 0.25。
-- `--retain-island-state`：跨外循环继续演化已有岛种群，供消融实验使用。
-- `--fixed-island-definitions`：固定岛权重但仍逐轮重建，用作状态保留的严格对照。
-- `--origin-ratio`：起源种群占共同种群的比例，默认为 0.2。
-- `--island-initialization`：覆盖 profile 的 `multi_ancestor` 或 `single_ancestor`。
-- `--direction-neighbor-ancestors`：每个岛优先注入的方向邻近解数量，默认为 4。
-- `--diverse-ancestors`：每个岛注入的决策空间差异解数量，默认为 2。
-- `--island-direction-mode`：选择 `axis_random` 或 `reference_subset`。
-- `--island-count-multiplier`：构造 `2M` 或 `4M` 个岛；消融结果不支持将 4M 设为默认。
-- `--outer-batch-ratio`：固定外批次相对共同种群 N 的比例。
-- `--local-fe-ratio`、`--recombination-fe-ratio`：candidate/S2 批次内 FE 分配，两者之和必须为 1。
-- `--isolated-fe-ratio`、`--shared-fe-ratio`：S3 方向内和共享父代后代的 FE 比例；与重组比例之和必须为 1。
-- `--direction-memory-capacity`：覆盖每个方向微种群的自动容量 `ceil(N / 2M)`。
-- `--protect-direction-elites`：显式覆盖方向收敛精英保护开关。
-- `--adaptive-source-budget`：显式覆盖三类后代的贡献驱动预算开关。
-- `--source-budget-smoothing`：贡献分数的历史平滑系数。
-- `--pairing-strategy`：`farthest_weight`、`nearest_weight`、`random`、`farthest_decision` 或 `none`。
-- `--inner-generations-early`：前期每轮岛内演化代数，默认为 1。
-- `--inner-generations-late`：后期每轮岛内演化代数，默认为 1。
-
-## IEMOEC 版本架构
-
-| variant | schema | 初始化 | 建岛 | 方向与 FE 调度 | 全局选择 |
-|---|---:|---|---|---|---|
-| `v0` | 0 | 仅评价小 origin | 单祖先 PM 扩岛 | axis/random、旧预算 | 旧双重选择 |
-| `s1` | 1 | 仅评价小 origin | 全局池多祖先、0 FE | axis/random、旧预算 | 旧双重选择 |
-| `candidate` | 2 | 评价公共完整 N | origin anchor + supporting founders | 参考方向子集、固定批次 | 每轮一次 survival |
-| `s2` | 3 | 评价公共完整 N | origin anchor + supporting founders | axis/random、2M、固定 N 批次 | 每轮一次 NSGA-III survival |
-| `s2_no_isolation` | 4 | 评价公共完整 N | 每轮共享父代池 | 75/0/25、固定 N 批次 | 每轮一次 NSGA-III survival |
-| `s3_memory` | 5 | 评价公共完整 N | 持久方向微种群 | 75/0/25、固定 N 批次 | NSGA-III survival |
-| `s3_hybrid` | 6 | 评价公共完整 N | 持久方向微种群 | 50/25/25、固定 N 批次 | NSGA-III survival |
-| `s3_elite` | 7 | 评价公共完整 N | 持久方向微种群 | 50/25/25、固定 N 批次 | 方向精英 + NSGA-III |
-| `s3` | 8 | 评价公共完整 N | 持久方向微种群 | 贡献驱动、固定 N 批次 | 方向精英 + NSGA-III |
-
-V0、S1 和 candidate 保留为复现实验入口；完成结构消融后，统一 CLI 默认使用 S2。candidate/S2 每轮使用同一
-ideal/nadir 归一化上下文，先按 X 去重，再执行一次可消融的外层 survival；origin 优先吸收
-存活的岛方向代表，再用非支配等级和拥挤度补齐。`rank`、`rank_crowding`、`nsga3` 的输出标签
-分别为 IEMOEC-Rank、IEMOEC-CD、IEMOEC-RD。
-
-S2 固定采用消融中更稳健的 `axis_random + 2M + NSGA-III RD + farthest_weight + 75/25 FE`
-组合。Rank、Rank-Crowding、4M、50/50 FE 和其他 pairing 仍保留为显式消融参数，不作为默认机制。
-
-每个 `config.json` 都记录 `algorithm_schema_version`。不同 schema 不允许写入同一结果目录，
-即使指定 `--force` 也必须更换 `--run-name`。未显式指定 run-name 时，目录名自动包含 variant。
-`metrics.json` 另行记录 `metric_schema_version`；参考前沿或指标定义升级后也必须使用新的
-run-name，避免同一批结果混用不同指标口径。
-
-## 输出结构
-
-```text
-results/my_pilot/
-  DTLZ2/
-    M5/
-      IEMOEC/
-        seed_007/
-          config.json
-          history.csv
-          final_population.csv
-          metrics.json
-  failures.json
-```
-
-其中 `history.csv` 的 `fe` 是公共固定检查点，最终行与 `metrics.json` 使用完全相同的最终 F。
-`final_population.csv` 保存决策、目标值和 provenance。candidate/S2/S3 的 `iemoec_diagnostics.csv` 还记录
-founder 多样性、合并唯一率、local/recombination 后代与存活率、方向覆盖率和每轮固定 FE 批次。
-S3 额外记录 isolated/shared/recombination 三类后代、存活率、方向改进、新方向数、
-方向记忆周转与停滞、受保护精英以及实际来源预算。
-主指标为 IGD+、HV，补充 GD+、pymoo Spacing、方向覆盖率和运行时间；历史默认不计算 HV。
-DTLZ7 与 WFG 使用固定随机状态的有界参考前沿生成，GD+/IGD+ 按批调用 pymoo 指标，避免
-高目标数或并行任务建立超大距离矩阵。
-
-## 汇总、统计与作图
-
-```powershell
-python scripts/summarize.py results/my_pilot
-python scripts/plot_results.py results/my_pilot --kind all
-```
-
-汇总产物包括：
-
-- `summary.csv`：mean、median、std、IQR；
-- `wilcoxon_holm.csv`：配对 Wilcoxon、Holm 校正和 Vargha-Delaney A12 效应量；
-- `friedman.json`：跨问题平均排名与 Friedman 检验；
-- `figures/`：中位数/IQR 收敛曲线、最终 IGD+ 箱线图和平行坐标图。
-
-## 验证
+运行测试：
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-## 严格实验口径
+当前测试集包含 68 项测试，覆盖公共初始化、FE 审计、指标、S2/S3 结构、S4 封闭谱系、
+有限邻域资格检查、坐标继承、schema 隔离和断点续跑。
 
-新批次启动时会在结果根目录写入 `experiment_manifest.json`。汇总程序只接受
-manifest 中声明的任务、算法 schema 和 metric schema；缺失任务默认报错。仅在
-pilot 探索阶段可以显式使用 `--allow-incomplete`，该模式不会填补缺失值，并会在
-`summary_validation.json` 中列出被排除的任务。
+## 3. 快速开始
 
-`AGEMOEA2STABLE` 是带零范数几何保护的独立 baseline，不能与原 `AGEMOEA2`
-结果混用。`s2_no_isolation` 是 S2 的共享局部父代池消融，保留其余方向、预算、
-重组和 NSGA-III survival 配置。
+所有批次都建议先运行 `--dry-run`，核对任务数、variant、schema、MaxFEs 和输出目录，
+确认后再去掉 `--dry-run`。
 
-保存的最终种群可以离线审计不同 HV 参考点，无需重新运行算法：
+以下命令运行 7 个算法的最小冒烟实验：
 
 ```powershell
-python scripts/audit_hv.py results/my_pilot `
+python scripts/run.py --preset benchmark_smoke `
+  --iemoec-variant s3_elite `
+  --workers 4 `
+  --run-name smoke_s3_elite `
+  --dry-run
+```
+
+确认显示 7 项后正式运行：
+
+```powershell
+python scripts/run.py --preset benchmark_smoke `
+  --iemoec-variant s3_elite `
+  --workers 4 `
+  --run-name smoke_s3_elite
+```
+
+运行结束会输出：
+
+```text
+完成=<数量> 跳过=<数量> 失败=<数量> | <结果目录>
+```
+
+相同配置和 run name 可以安全续跑，已经完成的任务会自动跳过。配置发生变化时必须更换
+`--run-name`；即使指定 `--force`，也不允许把不同 algorithm schema 或 metric schema 混入同一目录。
+
+## 4. 公平实验口径
+
+平台遵循以下共同规则：
+
+- baseline、IEMOEC 在相同问题和目标数下使用相同参考方向数 `N`；
+- 每个 problem、M、seed 共享同一份确定性初始决策向量；
+- 所有算法严格消耗相同 MaxFEs，不使用 IGD/HV 早停；
+- 正式实验不为 IEMOEC 提供额外 PF 后处理；
+- 低维计算精确 HV，高维使用固定公共采样的 Monte Carlo HV；
+- 主指标为 IGD+ 和 HV，补充 GD+、Spacing、ONVG、非支配比例、方向覆盖和运行时间；
+- 每个任务保存初始化哈希、实际 FE、种群规模、算法/指标 schema 和运行时间分解。
+
+默认参考方向对应的公共种群规模与预算如下：
+
+| M | N | pilot `200N` | formal `400N` |
+|---:|---:|---:|---:|
+| 2 | 100 | 20000 | 40000 |
+| 3 | 91 | 18200 | 36400 |
+| 5 | 210 | 42000 | 84000 |
+| 8 | 120 | 24000 | 48000 |
+| 10 | 220 | 44000 | 88000 |
+| 15 | 120 | 24000 | 48000 |
+
+推荐使用 `--evals-per-pop` 指定预算。显式使用 `--max-fes` 时，它必须能被相应的公共种群规模整除。
+
+## 5. IEMOEC 版本谱系
+
+| variant | schema | 作用与关键结构 |
+|---|---:|---|
+| `v0` | 0 | 旧版小 origin、单祖先扩岛和旧 FE 调度，仅供追溯 |
+| `s1` | 1 | 多祖先建岛，保留旧调度，仅供结构对照 |
+| `candidate` | 2 | 公共完整 N、固定批次和单次外层 survival |
+| `s2` | 3 | axis/random、2M 子群、75/25 局部/重组预算、NSGA-III survival |
+| `s2_no_isolation` | 4 | 使用共享父代池的去隔离控制 |
+| `s3_memory` | 5 | 在 S2 上增加持久方向微种群 |
+| `s3_hybrid` | 6 | 50/25/25 的隔离、共享、重组三来源繁殖 |
+| `s3_elite` | 7 | 当前性能版本：S3-Hybrid + 方向收敛精英保护 |
+| `s3` | 8 | 增加贡献驱动的自适应来源预算，实验上未取代 S3-Elite |
+| `principle` | 9 | 第一版忠实原理实现；存在等待全部谱系合格的调度缺陷 |
+| `s4` | 10 | 当前原理验证版：异步资格触发、多尺度有限邻域检查 |
+
+统一 CLI 默认 variant 仍是 `s2`，目的是保持旧命令兼容。运行当前性能版本时必须显式写：
+
+```text
+--iemoec-variant s3_elite
+```
+
+### 5.1 S3-Elite 性能架构
+
+S3-Elite 的每轮主要流程是：
+
+1. 用公共完整种群初始化；
+2. 按方向维护跨轮次的独立微种群记忆；
+3. 将本轮 FE 按 50% 隔离繁殖、25% 共享繁殖、25% 跨方向重组分配；
+4. 合并旧种群、方向记忆和三类后代并按决策向量去重；
+5. 从前两个非支配层为各方向提取收敛精英；
+6. 保护方向精英，再使用 NSGA-III survival 补齐公共种群；
+7. 记录来源存活、方向改进、方向记忆周转和覆盖等诊断信息。
+
+S3-Elite 是工程性能版本。它包含共享繁殖、方向记忆和参考方向 survival，因此不能被描述为对原始
+“完全封闭独立进化流程”的逐字实现。
+
+### 5.2 S4 原理验证架构
+
+S4 单独实现原始思想：
+
+1. 只随机生成约 `P=N/5` 个起源者；
+2. 每个起源者单独扩展为带谱系编号的小种群；
+3. 小种群之间不迁移、不共享亲本，各自在内部交叉、选择和变异；
+4. 局部停滞后执行可审计的多尺度有限邻域检查；
+5. 只有通过检查的不同谱系代表才有资格作为组合亲本；
+6. 通过坐标继承和变异产生混血后代；
+7. 只对本轮混血后代做非支配等级选择，形成下一轮起源者。
+
+有限邻域检查只是指定半径和有限方向下的数值证据，不是导数、KKT 或数学极值证明；坐标继承也
+不保证子代是驻点。详细约定、已知限制和审计字段见
+[原理验证版本说明](docs/原理验证版本0914.md)。
+
+## 6. 实验预设
+
+| preset | 用途 | 默认规模 |
+|---|---|---:|
+| `smoke` | 最小正确性检查 | 1 problem × 1 M × 1 seed |
+| `pilot` | DTLZ1–4 初步实验 | 4 × 3 × 5 |
+| `benchmark_smoke` | 7 算法冒烟 | 7 项 |
+| `benchmark_pilot` | 16 问题、M=3/5/10、7 算法 | 1680 项 |
+| `structure` | 结构消融代表集 | 每算法/variant 120 项 |
+| `mechanism` | 7 个机制代表问题 | 每算法/variant 105 项 |
+| `s3_development` | S3 高维开发集 | 每 variant 100 项 |
+| `formal` | 16 问题、5 个 M、30 seeds、7 算法 | 16800 项 |
+| `custom` | 完全自定义 | 由命令参数决定 |
+
+查看所有参数：
+
+```powershell
+python scripts/run.py --help
+```
+
+## 7. 正式实验复现
+
+一次性复现全部正式实验会生成 16800 项：
+
+```powershell
+python scripts/run.py --preset formal `
+  --iemoec-variant s3_elite `
+  --workers 4 `
+  --run-name formal_full_s3_elite `
+  --dry-run
+```
+
+确认显示 `实验任务: 16800` 后去掉 `--dry-run`。为了断点管理和避免修改 IEMOEC 后重跑固定
+baseline，也可以每种算法独立运行。例如：
+
+```powershell
+python scripts/run.py --preset formal `
+  --algorithms IEMOEC `
+  --iemoec-variant s3_elite `
+  --workers 4 `
+  --run-name formal_s3_elite_400n_schema5 `
+  --dry-run
+```
+
+该命令应显示 2400 项。六个正式 baseline 使用相同形式，将 `--algorithms` 和 `--run-name`
+分别替换为：
+
+| `--algorithms` | 推荐 run name |
+|---|---|
+| `NSGA2` | `formal_nsga2_400n_schema5` |
+| `NSGA3` | `formal_nsga3_400n_schema5` |
+| `MOEAD` | `formal_moead_tch_400n_schema5` |
+| `MOEADPBI` | `formal_moead_pbi_400n_schema5` |
+| `RVEA` | `formal_rvea_400n_schema5` |
+| `AGEMOEA2STABLE` | `formal_age_stable_400n_schema5` |
+
+`MOEAD` 表示 Tchebycheff 分解；`MOEADPBI` 表示 `PBI(theta=5.0)`。
+正式比较使用 `AGEMOEA2STABLE`，不能把旧 `AGEMOEA2` 结果混入其中。
+
+## 8. 干净计时
+
+干净计时必须单进程运行，避免任务之间争抢 CPU，并关闭算法执行期间的历史指标回调：
+
+```powershell
+python scripts/run.py --preset formal `
+  --algorithms IEMOEC `
+  --iemoec-variant s3_elite `
+  --timing-only `
+  --workers 1 `
+  --run-name timing_optimized_s3_elite `
+  --dry-run
+```
+
+`metrics.json` 会分别保存：
+
+- `algorithm_runtime_seconds`；
+- `metric_runtime_seconds`；
+- `io_runtime_seconds`；
+- `total_runtime_seconds`。
+
+只有 `algorithm_runtime_seconds` 适合用于算法内核时间比较。普通多进程 formal 的时间适合估算实验成本，
+不应作为严格的算法效率结论。
+
+## 9. 自定义实验
+
+```powershell
+python scripts/run.py --preset custom `
+  --algorithms NSGA3 RVEA AGEMOEA2STABLE IEMOEC `
+  --problems dtlz2 dtlz5 wfg3 wfg9 `
+  --objectives 3,5,8,10,15 `
+  --seeds 31-35 `
+  --evals-per-pop 400 `
+  --iemoec-variant s3_elite `
+  --workers 4 `
+  --run-name s3_elite_confirmation_seeds31_35 `
+  --dry-run
+```
+
+当前 1–30 seeds 已经用于发现 S3-Elite 的优势和弱点。若基于这些结果开发 S3.1，建议冻结算法后
+使用新 seeds（例如 31–60）或独立问题集做确认实验，避免只在开发数据上报告改进。
+
+常用参数：
+
+- `--dry-run`：只生成并展示任务清单；
+- `--force`：重跑完全相同的配置；
+- `--run-name`：固定输出批次名，支持断点续跑；
+- `--workers`：任务级并行数；
+- `--evals-per-pop`：设置 `MaxFEs=N×倍数`；
+- `--timing-only`：关闭历史指标回调；
+- `--no-recombination`：关闭重组，用于机制消融；
+- `--iemoec-survival`：选择 `rank`、`rank_crowding` 或 `nsga3`；
+- `--pairing-strategy`：设置方向/决策空间配对策略；
+- `--isolated-fe-ratio`、`--shared-fe-ratio`：覆盖 S3 来源预算；
+- `--direction-memory-capacity`：覆盖方向微种群容量；
+- `--principle-*`：设置 S4 局部代数、停滞、探测半径和容差。
+
+S4 会拒绝 S2/S3 专属的共享繁殖、参考方向 survival、状态保留等参数，防止原理版本被旧机制污染。
+
+## 10. 输出与审计
+
+```text
+results/<run-name>/
+  experiment_manifest.json
+  failures.json
+  DTLZ2/
+    M5/
+      IEMOEC/
+        seed_007/
+          config.json
+          metrics.json
+          history.csv
+          final_population.csv
+          iemoec_diagnostics.csv
+```
+
+主要文件：
+
+- `experiment_manifest.json`：批次声明的全部任务和 schema；
+- `failures.json`：失败任务，完整成功时为 `[]`；
+- `config.json`：规范化算法配置、variant、schema 和预算；
+- `metrics.json`：最终指标、FE、初始化哈希和时间分解；
+- `history.csv`：固定 FE 检查点的收敛历史；
+- `final_population.csv`：最终决策变量、目标值和可用的 provenance；
+- `iemoec_diagnostics.csv`：IEMOEC 每轮预算、来源贡献、覆盖和记忆诊断；
+- `lineage_audit.csv`：S4 的谱系、资格检查、组合亲本与坐标继承审计。
+
+汇总程序默认严格验证 manifest，缺少或出现额外任务都会报错。探索性不完整结果只能显式使用
+`--allow-incomplete`，并会生成排除记录。
+
+```powershell
+python scripts/summarize.py results/my_run
+python scripts/plot_results.py results/my_run --kind all
+```
+
+汇总产物包括描述统计、配对 Wilcoxon、Holm 校正、Vargha–Delaney A12、Friedman 检验和图表。
+
+离线审计不同 HV 参考点，不需要重新运行算法：
+
+```powershell
+python scripts/audit_hv.py results/my_run `
   --reference-points 1.1 1.5 2.0 `
   --samples 200000
 ```
 
-纯计时批次使用 `--workers 1 --timing-only`。该模式关闭逐代指标与历史记录，并在
-`metrics.json` 中分别保存 `algorithm_runtime_seconds`、
-`metric_runtime_seconds`、`io_runtime_seconds` 和 `total_runtime_seconds`。
-
-测试覆盖公共初始化、目标尺度不变性、多祖先 0 FE、方向子集、pairing、去重、固定 FE 调度、
-严格 MaxFEs、DTLZ2/WFG1 M=3/5/10 集成、最终 history/metrics 一致性和 schema 防混写。
-
-## 代码结构
+## 11. 项目结构
 
 ```text
 src/iemoec_experiment/
-  config.py      实验与 IEMOEC 配置
-  problems.py    pymoo 问题工厂及旧 C-DTLZ2 薄包装
-  factory.py     pymoo baseline、参考方向与算子工厂
-  initialization.py 公共初始决策向量
-  normalization.py 单轮公共目标归一化
-  directions.py 参考方向子集选择
-  directional_memory.py S3 持久方向微种群
-  source_budget.py S3 固定与贡献驱动 FE 分配
-  metrics.py     公共参考 PF、归一化和指标
-  iemoec.py      IEMOEC 自定义核心
-  runner.py      单任务执行、检查点和标准结果输出
+  config.py               实验配置、版本 profile 与 schema
+  problems.py             DTLZ/WFG 问题工厂
+  factory.py              baseline、参考方向和公共算子
+  initialization.py       跨算法公共初始化
+  normalization.py        目标归一化
+  directions.py           方向子集和方向目标
+  directional_memory.py   S3 持久方向记忆
+  source_budget.py        S3 固定/自适应来源预算
+  iemoec.py               S2/S3 算法核心
+  principle.py            principle/S4 原理验证核心
+  metrics.py              参考前沿与质量指标
+  manifest.py             实验任务清单
+  runner.py               单任务执行、计时和标准输出
 scripts/
-  run.py         批量实验/并行/断点续跑入口
-  summarize.py   多种子统计检验
-  plot_results.py 统一离线绘图
+  run.py                   统一批量实验入口
+  summarize.py             统计检验与汇总
+  plot_results.py          收敛、箱线和平行坐标图
+  audit_hv.py              离线 HV 审计
+  draw_iemoec_framework.py 算法框架图
 tests/
-  test_experiment.py
+  test_experiment.py       实验平台与 S2/S3 测试
+  test_principle.py        principle/S4 测试
+docs/
+  第二次formal实验0920.md   当前正式实验报告
+  实验改进方案0912.md      S3 设计与实验方案
+  原理验证版本0914.md      S4 实现边界与审计说明
 ```
 
-旧的自实现 baseline、DTLZ、遗传算子和指标代码已经移除，避免与 pymoo 管线混用。Git 历史仍保留旧实现以供追溯。
-# 原理验证版本（principle）
+## 12. 研究与实现边界
 
-新增独立的 `--iemoec-variant principle`（algorithm schema 9）：P≈N/5 单祖先建群、封闭局部竞争、有限邻域资格检查、合格代表坐标元素重组、仅混血后代按非支配等级选祖先。无方向档案、共享繁殖、CD 或参考方向 survival。
+- 旧自实现 baseline、DTLZ/WFG、遗传算子和指标已经移除，公共组件统一复用 pymoo；
+- S3-Elite 的正式优势是经验结果，不构成极值组合理论的数学证明；
+- S4 的有限邻域“极值资格”不能称为严格驻点或 KKT 证书；
+- 当前研究对象是无约束、有限边界的连续多目标问题；
+- formal 使用 `400N`，pilot 通常使用 `200N`，二者不能直接拼接 seeds；
+- 修改算法行为必须提升 algorithm schema 并使用新 run name；纯等价性能优化可以保留 schema，
+  但必须用固定 seed 回归确认最终种群和诊断记录不变。
 
-本版本最终种群不强制为 N；有限邻域检查不是数学极值证明，重组也不保证产生驻点。首次运行及审计说明见 [原理验证版本0914](docs/原理验证版本0914.md)。保留旧 S2/S3，使用独立 run name，不复用旧结果。
+下一阶段优先研究：修正精英保护后的方向占用、降低 M=3 退化、改善 DTLZ1–4 的规则前沿表现，
+以及为 WFG6/9 引入对变量关联更友好的亲本选择。任何新版本都应先小规模机制验证，再使用独立 seeds
+进行确认，而不是直接重跑并反复调参全部 formal。
