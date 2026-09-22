@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from pymoo.indicators.gd_plus import GDPlus
 from pymoo.indicators.hv import HV
 from pymoo.indicators.igd_plus import IGDPlus
 from pymoo.indicators.spacing import SpacingIndicator
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+
+from .constraints import FEASIBILITY_TOLERANCE, total_constraint_violation
+from .problems import is_constrained_problem_name
 
 
 _REFERENCE_DATA_CACHE: dict[
@@ -14,6 +19,14 @@ _REFERENCE_DATA_CACHE: dict[
 ] = {}
 
 METRIC_SCHEMA_VERSION = 5
+CONSTRAINED_METRIC_SCHEMA_VERSION = 6
+
+
+def metric_schema_version_for_problem(problem_name: str) -> int:
+    """约束指标独立使用 schema 6，旧 formal 继续保持 schema 5。"""
+    if is_constrained_problem_name(problem_name):
+        return CONSTRAINED_METRIC_SCHEMA_VERSION
+    return METRIC_SCHEMA_VERSION
 
 
 def _deterministic_reference_directions(
@@ -65,6 +78,53 @@ def _make_reference_front(
 ) -> np.ndarray:
     module = problem.__class__.__module__.lower()
     name = problem.__class__.__name__.lower()
+    problem_id = getattr(problem, "_iemoec_problem_id", name)
+    if problem_id.startswith("dascmop"):
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "references"
+            / "dascmop"
+            / f"{problem_id}.pf"
+        )
+        if not path.exists():
+            raise ValueError(f"缺少 DAS-CMOP 参考前沿文件: {path}")
+        return _downsample_front(np.loadtxt(path), n_points)
+    if problem_id == "c2dtlz2":
+        # C2-DTLZ2 的可行 PF 是多个分离区域。高维时直接使用 n_points
+        # 个 Dirichlet 方向会留下过少可行点，因此先确定性过采样再筛选。
+        sample_count = max(n_points, n_points * 4 * problem.n_obj)
+        random_count = max(0, sample_count - problem.n_obj)
+        constrained_directions = np.vstack([
+            np.eye(problem.n_obj),
+            _deterministic_reference_directions(
+                problem.n_obj,
+                random_count,
+            ),
+        ])
+        front = problem.pareto_front(ref_dirs=constrained_directions)
+        if len(front) <= n_points:
+            return front
+        axis_front = front[:problem.n_obj]
+        remaining = _downsample_front(
+            front[problem.n_obj:],
+            n_points - len(axis_front),
+        )
+        return np.vstack([axis_front, remaining])
+    if problem_id in ("c1dtlz1", "c1dtlz3", "c3dtlz4"):
+        # 显式加入坐标轴，确保 constrained schema 的 ideal/nadir 不因
+        # 随机方向没有采到边界而系统性偏移。
+        random_count = max(0, n_points - problem.n_obj)
+        constrained_directions = np.vstack([
+            np.eye(problem.n_obj),
+            _deterministic_reference_directions(
+                problem.n_obj,
+                random_count,
+            ),
+        ])
+        return np.asarray(
+            problem.pareto_front(ref_dirs=constrained_directions),
+            dtype=float,
+        )
     if "wfg" in module:
         return _wfg_reference_front(problem, n_points)
     if name in ("dtlz5", "dtlz6"):
@@ -107,6 +167,7 @@ def reference_data(
     """返回进程内共享的参考 PF、ideal point 和 nadir point。"""
     cache_key = (
         problem.__class__.__module__, problem.__class__.__name__,
+        getattr(problem, "_iemoec_problem_id", None),
         problem.n_var, problem.n_obj, n_points,
     )
     if cache_key in _REFERENCE_DATA_CACHE:
@@ -145,8 +206,20 @@ class MetricSuite:
     ):
         problem_module = problem.__class__.__module__.lower()
         problem_name = problem.__class__.__name__.lower()
-        if "wfg" in problem_module:
+        problem_id = getattr(problem, "_iemoec_problem_id", problem_name)
+        self.constrained = bool(problem.has_constraints())
+        if problem_id.startswith("dascmop"):
+            self.reference_front_method = "bundled_pymoo_data_pf"
+        elif "wfg" in problem_module:
             self.reference_front_method = "pymoo_pareto_set_seed_1"
+        elif problem_id == "c2dtlz2":
+            self.reference_front_method = (
+                "pymoo_constrained_pf_oversampled_dirichlet_axes_seed_1"
+            )
+        elif problem_id in ("c1dtlz1", "c1dtlz3", "c3dtlz4"):
+            self.reference_front_method = (
+                "pymoo_constrained_pf_dirichlet_axes_seed_1"
+            )
         elif problem_name in ("dtlz5", "dtlz6"):
             self.reference_front_method = "pymoo_dtlz5_dtlz6_formula"
         elif problem_name == "dtlz7":
@@ -223,13 +296,66 @@ class MetricSuite:
             "hv": self._calculate_hv(normalized_nd),
         }
 
-    def calculate_hv(self, F: np.ndarray) -> dict[str, float | int]:
-        nd = nondominated(np.asarray(F, dtype=float))
+    def calculate_hv(
+        self,
+        F: np.ndarray,
+        CV: np.ndarray | None = None,
+    ) -> dict[str, float | int]:
+        values = np.asarray(F, dtype=float)
+        if self.constrained:
+            if CV is None:
+                raise ValueError("约束问题计算 HV 时必须提供 CV")
+            violation = total_constraint_violation(CV, len(values))
+            values = values[violation <= FEASIBILITY_TOLERANCE]
+            if not len(values):
+                return {
+                    "hv_reference_point": self.hv_ref,
+                    "hv_eligible_solution_count": 0,
+                    "hv": 0.0,
+                }
+        nd = nondominated(values)
         normalized_nd = normalize(nd, self.ideal, self.nadir)
         return self._hv_values(normalized_nd)
 
-    def calculate(self, F: np.ndarray, include_hv: bool = True) -> dict[str, float | int]:
+    def calculate(
+        self,
+        F: np.ndarray,
+        include_hv: bool = True,
+        CV: np.ndarray | None = None,
+    ) -> dict[str, float | int | bool | None]:
         F = np.asarray(F, dtype=float)
+        constraint_result: dict[str, float | int | bool] = {}
+        if self.constrained:
+            if CV is None:
+                raise ValueError("约束问题计算指标时必须提供 CV")
+            violation = total_constraint_violation(CV, len(F))
+            feasible = violation <= FEASIBILITY_TOLERANCE
+            constraint_result = {
+                "has_feasible": bool(np.any(feasible)),
+                "feasible_count": int(np.sum(feasible)),
+                "feasible_ratio": float(np.mean(feasible)) if len(feasible) else 0.0,
+                "min_cv": float(np.min(violation)) if len(violation) else 0.0,
+                "mean_cv": float(np.mean(violation)) if len(violation) else 0.0,
+            }
+            F = F[feasible]
+            if not len(F):
+                result: dict[str, float | int | bool | None] = {
+                    "igd_plus": None,
+                    "gd_plus": None,
+                    "spacing": None,
+                    "onvg": 0,
+                    "nd_ratio": 0.0,
+                    "direction_occupancy": 0.0,
+                    "feasible_direction_coverage": 0.0,
+                    **constraint_result,
+                }
+                if include_hv:
+                    result.update({
+                        "hv_reference_point": self.hv_ref,
+                        "hv_eligible_solution_count": 0,
+                        "hv": 0.0,
+                    })
+                return result
         nd = nondominated(F)
         normalized_nd = normalize(nd, self.ideal, self.nadir)
         result: dict[str, float | int] = {
@@ -252,6 +378,24 @@ class MetricSuite:
             result["direction_occupancy"] = float(
                 len(np.unique(assigned)) / len(directions)
             )
+            if self.constrained:
+                result["feasible_direction_coverage"] = result[
+                    "direction_occupancy"
+                ]
         if include_hv:
             result.update(self._hv_values(normalized_nd))
+        result.update(constraint_result)
         return result
+
+    def calculate_population(
+        self,
+        population,
+        include_hv: bool = True,
+    ) -> dict[str, float | int | bool | None]:
+        """直接从 Population 计算指标，约束问题自动读取 CV。"""
+        CV = population.get("CV") if self.constrained else None
+        return self.calculate(
+            population.get("F"),
+            include_hv=include_hv,
+            CV=CV,
+        )

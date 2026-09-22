@@ -22,9 +22,13 @@ from iemoec_experiment.manifest import load_manifest, validate_result_rows  # no
 
 METRICS = (
     "igd_plus", "gd_plus", "hv", "spacing", "direction_occupancy",
+    "feasible_direction_coverage", "feasible_ratio", "min_cv", "mean_cv",
     "nd_ratio", "runtime_seconds",
 )
-LOWER_IS_BETTER = {"igd_plus", "gd_plus", "spacing", "runtime_seconds"}
+LOWER_IS_BETTER = {
+    "igd_plus", "gd_plus", "spacing", "min_cv", "mean_cv",
+    "runtime_seconds",
+}
 ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
@@ -96,8 +100,11 @@ def a12_magnitude(value: float) -> str:
 def write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
+    available = {key for row in rows for key in row}
+    fieldnames = list(rows[0])
+    fieldnames.extend(sorted(available - set(fieldnames)))
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -119,7 +126,14 @@ def summarize(rows: list[dict]) -> list[dict]:
             "n": len(values),
         }
         for metric in METRICS:
-            data = np.asarray([value[metric] for value in values], dtype=float)
+            data = np.asarray([
+                value[metric]
+                for value in values
+                if value.get(metric) is not None
+            ], dtype=float)
+            if not len(data):
+                continue
+            item[f"{metric}_n_valid"] = len(data)
             item[f"{metric}_mean"] = float(np.mean(data))
             item[f"{metric}_std"] = float(np.std(data, ddof=1)) if len(data) > 1 else 0.0
             item[f"{metric}_median"] = float(np.median(data))
@@ -141,6 +155,10 @@ def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
                     if r["problem"] == problem and r["n_obj"] == n_obj
                     and (problem, n_obj, target, r["seed"]) in lookup
                     and (problem, n_obj, algorithm, r["seed"]) in lookup
+                    and lookup[(problem, n_obj, target, r["seed"])].get(metric)
+                    is not None
+                    and lookup[(problem, n_obj, algorithm, r["seed"])].get(metric)
+                    is not None
                 })
                 if not seeds:
                     continue
@@ -200,6 +218,15 @@ def friedman_report(rows: list[dict]) -> dict:
             for algorithm in algorithms
         ]
         common_seeds = set.intersection(*seed_sets) if seed_sets else set()
+        common_seeds = {
+            seed
+            for seed in common_seeds
+            if all(
+                lookup[(problem, n_obj, algorithm, seed)].get("igd_plus")
+                is not None
+                for algorithm in algorithms
+            )
+        }
         all_seeds = set.union(*seed_sets) if seed_sets else set()
         common_seed_counts[f"{problem}-M{n_obj}"] = len(common_seeds)
         excluded_run_blocks += len(all_seeds - common_seeds)

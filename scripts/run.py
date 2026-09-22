@@ -23,8 +23,29 @@ from iemoec_experiment.config import (  # noqa: E402
 )
 from iemoec_experiment.factory import reference_directions  # noqa: E402
 from iemoec_experiment.manifest import build_manifest, write_manifest  # noqa: E402
-from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
+from iemoec_experiment.metrics import (  # noqa: E402
+    metric_schema_version_for_problem,
+)
+from iemoec_experiment.problems import make_problem  # noqa: E402
 from iemoec_experiment.runner import run_case  # noqa: E402
+
+
+C_DTLZ_PROBLEMS = ("c1dtlz1", "c1dtlz3", "c2dtlz2", "c3dtlz4")
+C_DTLZ_OBJECTIVES = (3, 5, 8, 10, 15)
+DASCMOP_PROBLEMS = ("dascmop7", "dascmop8", "dascmop9")
+DASCMOP_DIFFICULTIES = (4, 8, 12, 16)
+CONSTRAINED_ALGORITHMS = (
+    "NSGA2", "NSGA3", "RVEA", "AGEMOEA2STABLE", "CTAEA", "IEMOEC",
+)
+CONSTRAINED_PILOT_SCENARIOS = [
+    (problem, n_obj)
+    for problem in C_DTLZ_PROBLEMS
+    for n_obj in C_DTLZ_OBJECTIVES
+] + [
+    (f"{problem}_d{difficulty}", 3)
+    for problem in DASCMOP_PROBLEMS
+    for difficulty in DASCMOP_DIFFICULTIES
+]
 
 
 PRESETS = {
@@ -94,6 +115,32 @@ PRESETS = {
         "seeds": list(range(1, 6)),
         "evals_per_pop": 200,
     },
+    "constrained_smoke": {
+        "algorithms": ["NSGA2", "NSGA3", "CTAEA", "IEMOEC"],
+        "scenarios": [
+            ("c1dtlz1", 3),
+            ("c2dtlz2", 3),
+            ("dascmop7_d4", 3),
+            ("dascmop9_d12", 3),
+        ],
+        "seeds": [1, 2, 3],
+        "evals_per_pop": 50,
+        "iemoec_variant": "s3_elite_constrained",
+    },
+    "constrained_pilot": {
+        "algorithms": list(CONSTRAINED_ALGORITHMS),
+        "scenarios": CONSTRAINED_PILOT_SCENARIOS,
+        "seeds": list(range(1, 6)),
+        "evals_per_pop": 200,
+        "iemoec_variant": "s3_elite_constrained",
+    },
+    "constrained_formal": {
+        "algorithms": list(CONSTRAINED_ALGORITHMS),
+        "scenarios": CONSTRAINED_PILOT_SCENARIOS,
+        "seeds": list(range(31, 61)),
+        "evals_per_pop": 400,
+        "iemoec_variant": "s3_elite_constrained",
+    },
     "formal": {
         "algorithms": [
             "NSGA2", "NSGA3", "MOEAD", "MOEADPBI",
@@ -140,6 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "smoke", "pilot", "benchmark_smoke", "benchmark_pilot",
             "structure", "mechanism", "s3_development", "formal", "custom",
+            "constrained_smoke", "constrained_pilot", "constrained_formal",
         ],
         default="smoke",
     )
@@ -182,8 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "v0", "s1", "candidate", "s2", "s2_no_isolation",
             "s3_memory", "s3_hybrid", "s3_elite", "s3", "principle", "s4",
+            "s3_elite_constrained",
         ],
-        default="s2",
+        default=None,
     )
     parser.add_argument(
         "--iemoec-survival",
@@ -247,14 +296,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 def resolve_cases(args) -> list[ExperimentCase]:
     preset = PRESETS.get(args.preset, {})
-    problems = args.problems or preset.get("problems")
-    objectives = args.objectives or preset.get("objectives")
+    if args.problems is None and args.objectives is None and "scenarios" in preset:
+        scenarios = list(preset["scenarios"])
+    else:
+        problems = args.problems or preset.get("problems")
+        objectives = args.objectives or preset.get("objectives")
+        if not problems or not objectives:
+            raise ValueError(
+                "custom 模式或覆盖场景时必须同时提供 --problems 和 --objectives"
+            )
+        scenarios = [
+            (problem, n_obj)
+            for problem in problems
+            for n_obj in objectives
+        ]
     seeds = args.seeds or preset.get("seeds")
     algorithms = args.algorithms or preset.get("algorithms") or DEFAULT_ALGORITHMS
     evals_per_pop = args.evals_per_pop or preset.get("evals_per_pop", 200)
-    if not problems or not objectives or not seeds:
-        raise ValueError("custom 模式必须提供 --problems、--objectives 和 --seeds")
-    run_name = args.run_name or f"{args.preset}_{args.iemoec_variant}"
+    if not seeds:
+        raise ValueError("必须提供 --seeds 或使用包含 seeds 的 preset")
+    iemoec_variant = (
+        args.iemoec_variant
+        or preset.get("iemoec_variant")
+        or "s2"
+    )
+    run_name = args.run_name or f"{args.preset}_{iemoec_variant}"
     output_root = str(Path(args.output_root) / run_name)
     overrides = {
         "origin_ratio": args.origin_ratio,
@@ -288,7 +354,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
         "pairing_strategy": args.pairing_strategy,
     }
     overrides.update({key: value for key, value in optional.items() if value is not None})
-    if args.iemoec_variant in ("principle", "s4"):
+    if iemoec_variant in ("principle", "s4"):
         defaults = build_parser().parse_args([])
         forbidden = list(optional) + [
             "iemoec_survival", "iemoec_crowding", "no_recombination",
@@ -311,13 +377,14 @@ def resolve_cases(args) -> list[ExperimentCase]:
     fixed_batch_variants = (
         "candidate", "s2", "s2_no_isolation",
         "s3_memory", "s3_hybrid", "s3_elite", "s3",
+        "s3_elite_constrained",
     )
-    if args.no_recombination and args.iemoec_variant in fixed_batch_variants:
+    if args.no_recombination and iemoec_variant in fixed_batch_variants:
         overrides.update({"pairing_strategy": "none", "recombination_fe_ratio": 0.0})
-        if args.iemoec_variant.startswith("s3"):
+        if iemoec_variant.startswith("s3"):
             if args.isolated_fe_ratio is None and args.shared_fe_ratio is None:
                 shared_ratio = (
-                    0.0 if args.iemoec_variant == "s3_memory" else 1 / 3
+                    0.0 if iemoec_variant == "s3_memory" else 1 / 3
                 )
                 overrides.update({
                     "isolated_fe_ratio": 1.0 - shared_ratio,
@@ -326,15 +393,15 @@ def resolve_cases(args) -> list[ExperimentCase]:
         else:
             overrides["local_fe_ratio"] = 1.0
     elif (
-        args.iemoec_variant in fixed_batch_variants
+        iemoec_variant in fixed_batch_variants
         and args.pairing_strategy == "none"
         and args.recombination_fe_ratio is None
     ):
         overrides["recombination_fe_ratio"] = 0.0
-        if args.iemoec_variant.startswith("s3"):
+        if iemoec_variant.startswith("s3"):
             if args.isolated_fe_ratio is None and args.shared_fe_ratio is None:
                 shared_ratio = (
-                    0.0 if args.iemoec_variant == "s3_memory" else 1 / 3
+                    0.0 if iemoec_variant == "s3_memory" else 1 / 3
                 )
                 overrides.update({
                     "isolated_fe_ratio": 1.0 - shared_ratio,
@@ -342,39 +409,49 @@ def resolve_cases(args) -> list[ExperimentCase]:
                 })
         else:
             overrides["local_fe_ratio"] = 1.0
-    iemoec = IEMOECConfig.for_variant(args.iemoec_variant, **overrides)
+    iemoec = IEMOECConfig.for_variant(iemoec_variant, **overrides)
     cases = []
-    for problem in problems:
-        for n_obj in objectives:
-            probe = ExperimentCase("NSGA2", problem, n_obj, seeds[0], 1)
-            pop_size = len(reference_directions(probe))
-            max_fes = args.max_fes or (pop_size * evals_per_pop)
-            if max_fes % pop_size:
-                raise ValueError(
-                    f"M={n_obj} 的共同种群大小是 {pop_size}，max_fes={max_fes} 不是其倍数"
+    for problem, n_obj in scenarios:
+        make_problem(problem, n_obj)
+        probe = ExperimentCase("NSGA2", problem, n_obj, seeds[0], 1)
+        pop_size = len(reference_directions(probe))
+        max_fes = args.max_fes or (pop_size * evals_per_pop)
+        if max_fes % pop_size:
+            raise ValueError(
+                f"M={n_obj} 的共同种群大小是 {pop_size}，"
+                f"max_fes={max_fes} 不是其倍数"
+            )
+        for algorithm in algorithms:
+            for seed in seeds:
+                case = ExperimentCase(
+                    algorithm=algorithm,
+                    problem=problem,
+                    n_obj=n_obj,
+                    seed=seed,
+                    max_fes=max_fes,
+                    output_root=output_root,
+                    history_points=args.history_points,
+                    history_hv=args.history_hv,
+                    reference_points=args.reference_points,
+                    high_dim_hv_samples=args.high_dim_hv_samples,
+                    timing_only=args.timing_only,
+                    iemoec=iemoec,
                 )
-            for algorithm in algorithms:
-                for seed in seeds:
-                    cases.append(ExperimentCase(
-                        algorithm=algorithm,
-                        problem=problem,
-                        n_obj=n_obj,
-                        seed=seed,
-                        max_fes=max_fes,
-                        output_root=output_root,
-                        history_points=args.history_points,
-                        history_hv=args.history_hv,
-                        reference_points=args.reference_points,
-                        high_dim_hv_samples=args.high_dim_hv_samples,
-                        timing_only=args.timing_only,
-                        iemoec=iemoec,
-                    ))
+                case.validate()
+                cases.append(case)
     return cases
 
 
 def ensure_metric_schema_isolated(cases: list[ExperimentCase]) -> None:
     """整批启动前阻止新旧指标定义混入同一 run-name。"""
     root = Path(cases[0].output_root)
+    requested_schemas = {
+        metric_schema_version_for_problem(case.normalized_problem)
+        for case in cases
+    }
+    if len(requested_schemas) != 1:
+        raise ValueError("同一批次不能混合约束与无约束 metric schema")
+    requested_schema = next(iter(requested_schemas))
     schemas = set()
     for path in root.rglob("metrics.json") if root.exists() else ():
         try:
@@ -382,10 +459,10 @@ def ensure_metric_schema_isolated(cases: list[ExperimentCase]) -> None:
                 schemas.add(json.load(handle).get("metric_schema_version"))
         except (OSError, json.JSONDecodeError, AttributeError):
             schemas.add(None)
-    if schemas and schemas != {METRIC_SCHEMA_VERSION}:
+    if schemas and schemas != {requested_schema}:
         raise ValueError(
             f"{root} 已包含 metric schema {sorted(str(value) for value in schemas)}；"
-            f"当前为 {METRIC_SCHEMA_VERSION}，请更换 --run-name"
+            f"当前为 {requested_schema}，请更换 --run-name"
         )
 
 
@@ -394,7 +471,10 @@ def main() -> int:
     try:
         cases = resolve_cases(args)
         ensure_metric_schema_isolated(cases)
-        manifest = build_manifest(cases, METRIC_SCHEMA_VERSION)
+        metric_schema_version = metric_schema_version_for_problem(
+            cases[0].normalized_problem
+        )
+        manifest = build_manifest(cases, metric_schema_version)
         write_manifest(
             Path(cases[0].output_root) / "experiment_manifest.json",
             manifest,

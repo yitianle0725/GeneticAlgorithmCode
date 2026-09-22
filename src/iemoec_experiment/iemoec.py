@@ -14,6 +14,13 @@ from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.ref_dirs import get_reference_directions
 
 from .config import ExperimentCase
+from .constraints import (
+    FEASIBILITY_TOLERANCE,
+    constraint_violation,
+    feasibility_first_order,
+    feasible_mask,
+    feasible_population,
+)
 from .directional_memory import DirectionalMemory
 from .directions import direction_objective, reference_direction_subset
 from .factory import reference_directions
@@ -44,6 +51,7 @@ class IEMOECRunner:
         initial_X: np.ndarray | None = None,
         on_checkpoint: Callable[[int, Population], None] | None = None,
         on_outer_selection: Callable[[int, Population], dict | None] | None = None,
+        on_evaluation: Callable[[int, Population], None] | None = None,
     ):
         if case.iemoec.variant in ("principle", "s4"):
             raise ValueError("Use PrincipleRunner for the closed-lineage principle variant")
@@ -69,11 +77,13 @@ class IEMOECRunner:
         )
         self.on_checkpoint = on_checkpoint
         self.on_outer_selection = on_outer_selection
+        self.on_evaluation = on_evaluation
         self.origin = Population.empty()
         self.candidate_pool = Population.empty()
         self.outer_records: list[dict] = []
         self.evaluated_X: dict[bytes, np.ndarray] = {}
         self.global_selection_count = 0
+        self.constraint_aware = self.config.variant == "s3_elite_constrained"
 
     @property
     def n_eval(self) -> int:
@@ -89,6 +99,8 @@ class IEMOECRunner:
         if not len(pop):
             return pop
         self.evaluator.eval(self.problem, pop)
+        if self.on_evaluation is not None:
+            self.on_evaluation(self.n_eval, pop)
         if self.on_checkpoint is not None:
             # 公共 checkpoint 始终使用最近一次完成全局筛选后的 archive。
             # 初始化阶段尚无 archive，才使用刚完成评价的起源种群。
@@ -118,6 +130,20 @@ class IEMOECRunner:
     ) -> Population:
         if len(pop) <= n_survive:
             return pop
+        if self.constraint_aware:
+            feasible = feasible_mask(pop)
+            feasible_indices = np.flatnonzero(feasible)
+            if len(feasible_indices) < n_survive:
+                infeasible_indices = np.flatnonzero(~feasible)
+                violation = constraint_violation(pop)[infeasible_indices]
+                order = np.argsort(violation, kind="stable")
+                needed = n_survive - len(feasible_indices)
+                selected = np.concatenate([
+                    feasible_indices,
+                    infeasible_indices[order[:needed]],
+                ])
+                return pop[selected]
+            pop = pop[feasible_indices]
         if self.config.use_crowding and self.config.variant in ("v0", "s1"):
             return RankAndCrowding().do(
                 self.problem,
@@ -150,6 +176,8 @@ class IEMOECRunner:
 
     def _outer_select(self, pop: Population, n_survive: int) -> Population:
         n_survive = min(n_survive, len(pop))
+        if n_survive <= 0:
+            return Population.empty()
         if self.config.outer_survival == "nsga3":
             from pymoo.algorithms.moo.nsga3 import ReferenceDirectionSurvival
 
@@ -167,6 +195,15 @@ class IEMOECRunner:
                 random_state=self.rng,
             )
         return self._front_truncate(pop, n_survive)
+
+    def _normalization_for(self, population: Population) -> ObjectiveNormalization:
+        """约束版本优先用可行目标建立尺度，避免不可行极端值污染方向。"""
+        source = population
+        if self.constraint_aware:
+            feasible = feasible_population(population)
+            if len(feasible):
+                source = feasible
+        return ObjectiveNormalization.from_objectives(source.get("F"))
 
     def _initialize(self) -> None:
         n = min(self.n_origin, self.remaining)
@@ -209,6 +246,8 @@ class IEMOECRunner:
 
     def _ancestor_index(self, weight: np.ndarray, objective: int | None) -> int:
         scores = self._direction_scores(self.origin, weight, objective)
+        if self.constraint_aware:
+            return int(feasibility_first_order(self.origin, scores)[0])
         return int(np.argmin(scores))
 
     @staticmethod
@@ -247,7 +286,11 @@ class IEMOECRunner:
             return Population.empty()
 
         scores = self._direction_scores(source, weight, objective, normalization)
-        ranked_all = np.argsort(scores, kind="stable")
+        ranked_all = (
+            feasibility_first_order(source, scores)
+            if self.constraint_aware
+            else np.argsort(scores, kind="stable")
+        )
         if self.config.uses_candidate_architecture:
             anchor_index = self._ancestor_index_from_population(
                 self.origin,
@@ -337,7 +380,13 @@ class IEMOECRunner:
             objective,
             normalization,
         )
-        anchor = anchor_population[int(np.argmin(scores))]
+        if self.constraint_aware:
+            anchor_index = int(
+                feasibility_first_order(anchor_population, scores)[0]
+            )
+        else:
+            anchor_index = int(np.argmin(scores))
+        anchor = anchor_population[anchor_index]
         anchor_key = self._x_key(anchor.get("X"))
         for index, individual in enumerate(source_population):
             if self._x_key(individual.get("X")) == anchor_key:
@@ -846,11 +895,21 @@ class IEMOECRunner:
         keys = {self._x_key(individual.get("X")) for individual in population}
         return len(keys) / len(population)
 
+    @staticmethod
+    def _feasible_ratio(population: Population) -> float:
+        if not len(population):
+            return 0.0
+        return float(np.mean(feasible_mask(population)))
+
     def _direction_coverage(
         self,
         population: Population,
         normalization: ObjectiveNormalization,
     ) -> tuple[float, float]:
+        if self.constraint_aware:
+            population = feasible_population(population)
+            if not len(population):
+                return 0.0, 1.0
         values = np.maximum(normalization.apply(population.get("F")), 0.0)
         values /= np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-12)
         directions = self.ref_dirs / np.maximum(
@@ -883,10 +942,43 @@ class IEMOECRunner:
             offspring_values[:, None, :] * active_weights[None, :, :],
             axis=2,
         )
-        improved = np.any(
-            offspring_scores < representative_scores[None, :] - 1e-12,
-            axis=1,
-        )
+        if self.constraint_aware:
+            offspring_violation = constraint_violation(offspring)
+            representative_violation = constraint_violation(representatives)
+            offspring_feasible = (
+                offspring_violation <= FEASIBILITY_TOLERANCE
+            )
+            representative_feasible = (
+                representative_violation <= FEASIBILITY_TOLERANCE
+            )
+            feasible_improvement = (
+                offspring_feasible[:, None]
+                & ~representative_feasible[None, :]
+            ) | (
+                offspring_feasible[:, None]
+                & representative_feasible[None, :]
+                & (
+                    offspring_scores
+                    < representative_scores[None, :] - 1e-12
+                )
+            )
+            infeasible_improvement = (
+                ~offspring_feasible[:, None]
+                & ~representative_feasible[None, :]
+                & (
+                    offspring_violation[:, None]
+                    < representative_violation[None, :] - 1e-12
+                )
+            )
+            improved = np.any(
+                feasible_improvement | infeasible_improvement,
+                axis=1,
+            )
+        else:
+            improved = np.any(
+                offspring_scores < representative_scores[None, :] - 1e-12,
+                axis=1,
+            )
         return float(np.mean(improved))
 
     def _assigned_reference_directions(
@@ -896,6 +988,10 @@ class IEMOECRunner:
     ) -> set[int]:
         if not len(population):
             return set()
+        if self.constraint_aware:
+            population = feasible_population(population)
+            if not len(population):
+                return set()
         values = np.maximum(normalization.apply(population.get("F")), 0.0)
         values /= np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-12)
         directions = self.ref_dirs / np.maximum(
@@ -924,14 +1020,20 @@ class IEMOECRunner:
         normalization: ObjectiveNormalization,
     ) -> Population:
         """从前两个非支配层中为每个方向选择至多一个收敛精英。"""
-        fronts = NonDominatedSorting().do(population.get("F"))
+        if self.constraint_aware:
+            eligible_population = feasible_population(population)
+            if not len(eligible_population):
+                return Population.empty()
+        else:
+            eligible_population = population
+        fronts = NonDominatedSorting().do(eligible_population.get("F"))
         eligible_fronts = fronts[:2]
         if not eligible_fronts:
             return Population.empty()
         eligible = np.concatenate(eligible_fronts).astype(int, copy=False)
         active_weights = np.asarray(weights, dtype=float)
         eligible_values = np.abs(
-            normalization.apply(population[eligible].get("F"))
+            normalization.apply(eligible_population[eligible].get("F"))
         )
         scores = np.max(
             eligible_values[:, None, :] * active_weights[None, :, :],
@@ -941,7 +1043,7 @@ class IEMOECRunner:
         selected = []
         seen: set[bytes] = set()
         for best_index in best_indices:
-            individual = population[int(eligible[int(best_index)])]
+            individual = eligible_population[int(eligible[int(best_index)])]
             key = self._x_key(individual.get("X"))
             if key in seen:
                 continue
@@ -1003,10 +1105,9 @@ class IEMOECRunner:
             self.problem,
             weights,
             capacity,
+            constraint_aware=self.constraint_aware,
         )
-        initial_normalization = ObjectiveNormalization.from_objectives(
-            self.candidate_pool.get("F")
-        )
+        initial_normalization = self._normalization_for(self.candidate_pool)
         memory.update(self.candidate_pool, initial_normalization)
         budget_controller = SourceBudgetController(
             {
@@ -1022,9 +1123,7 @@ class IEMOECRunner:
         while self.remaining > 0 and len(self.candidate_pool):
             fe_start = self.n_eval
             previous_population = self.candidate_pool
-            normalization = ObjectiveNormalization.from_objectives(
-                previous_population.get("F")
-            )
+            normalization = self._normalization_for(previous_population)
             parent_pools = memory.parent_pools()
             memory_population = memory.combined_population()
             representatives = memory.representatives(normalization)
@@ -1063,9 +1162,7 @@ class IEMOECRunner:
                 recombined,
             )
             unique_merged, _, _ = self._deduplicate_population(merged)
-            selection_normalization = ObjectiveNormalization.from_objectives(
-                unique_merged.get("F")
-            )
+            selection_normalization = self._normalization_for(unique_merged)
             self.candidate_pool, merged_unique_ratio, protected = (
                 self._select_s3_population(
                     merged,
@@ -1125,8 +1222,8 @@ class IEMOECRunner:
                 ) / generated
             budget_controller.update(contributions)
 
-            selected_normalization = ObjectiveNormalization.from_objectives(
-                self.candidate_pool.get("F")
+            selected_normalization = self._normalization_for(
+                self.candidate_pool
             )
             occupancy, empty_ratio = self._direction_coverage(
                 self.candidate_pool,
@@ -1210,6 +1307,27 @@ class IEMOECRunner:
                 ),
                 "island_state_reused": outer > 1,
             }
+            if self.constraint_aware:
+                candidate_violation = constraint_violation(self.candidate_pool)
+                candidate_feasible = (
+                    candidate_violation <= FEASIBILITY_TOLERANCE
+                )
+                record.update({
+                    "candidate_feasible_count": int(
+                        np.sum(candidate_feasible)
+                    ),
+                    "candidate_feasible_ratio": float(
+                        np.mean(candidate_feasible)
+                    ),
+                    "candidate_min_cv": float(np.min(candidate_violation)),
+                    "candidate_mean_cv": float(np.mean(candidate_violation)),
+                    "isolated_feasible_ratio": self._feasible_ratio(isolated),
+                    "shared_feasible_ratio": self._feasible_ratio(shared),
+                    "recombination_feasible_ratio": self._feasible_ratio(
+                        recombined
+                    ),
+                    "feasible_direction_coverage": occupancy,
+                })
             if self.on_outer_selection is not None:
                 event_metrics = self.on_outer_selection(
                     self.n_eval,

@@ -8,6 +8,14 @@ from pymoo.problems import get_problem
 
 
 _STANDARD = re.compile(r"^(dtlz[1-7]|wfg[1-9]|zdt[1-6])$")
+_CONSTRAINED_DTLZ = re.compile(r"^(c1dtlz1|c1dtlz3|c2dtlz2|c3dtlz4)$")
+_DASCMOP = re.compile(r"^dascmop([1-9])_d(\d{1,2})$")
+
+
+def is_constrained_problem_name(name: str) -> bool:
+    """判断规范化问题名是否属于当前受支持的约束测试集。"""
+    normalized = name.lower().replace("-", "")
+    return bool(_CONSTRAINED_DTLZ.match(normalized) or _DASCMOP.match(normalized))
 
 
 class ConvexDTLZ2(Problem):
@@ -54,16 +62,58 @@ def standard_problem_dimensions(name: str, n_obj: int) -> tuple[int, int, int | 
         k = 2 * (n_obj - 1)
         l = 20
         return k + l, k, l
+    if normalized == "c1dtlz1":
+        k = 5
+        return n_obj + k - 1, k, None
+    if normalized in ("c1dtlz3", "c2dtlz2"):
+        k = 10
+        return n_obj + k - 1, k, None
+    if normalized == "c3dtlz4":
+        k = 5
+        return n_obj + k - 1, k, None
     raise ValueError(f"{name} 不是 DTLZ/WFG 问题")
 
 
 def make_problem(name: str, n_obj: int, n_var: int | None = None) -> Problem:
-    """只对旧 C-DTLZ2 保留薄包装，其余问题直接交给 pymoo。"""
+    """构造统一命名的问题实例。"""
     normalized = name.lower().replace("-", "")
-    if normalized in ("cdtlz2", "convexdtlz2"):
+    if normalized == "cdtlz2":
+        raise ValueError(
+            "cdtlz2 名称有歧义：旧凸前沿问题请使用 convexdtlz2，"
+            "约束问题请使用 c2dtlz2"
+        )
+    if normalized == "convexdtlz2":
         return ConvexDTLZ2(n_var=n_var or n_obj + 9, n_obj=n_obj)
+    if _CONSTRAINED_DTLZ.match(normalized):
+        resolved_n_var, _, _ = standard_problem_dimensions(normalized, n_obj)
+        problem = get_problem(
+            normalized,
+            n_var=n_var or resolved_n_var,
+            n_obj=n_obj,
+        )
+        problem._iemoec_problem_id = normalized
+        return problem
+    dascmop_match = _DASCMOP.match(normalized)
+    if dascmop_match:
+        problem_number = int(dascmop_match.group(1))
+        difficulty = int(dascmop_match.group(2))
+        expected_objectives = 2 if problem_number <= 6 else 3
+        if n_obj != expected_objectives:
+            raise ValueError(
+                f"DASCMOP{problem_number} 仅支持 M={expected_objectives}"
+            )
+        if not 1 <= difficulty <= 16:
+            raise ValueError("DAS-CMOP difficulty 必须在 1 到 16 之间")
+        if n_var is not None and n_var != 30:
+            raise ValueError("DAS-CMOP 固定使用 n_var=30")
+        problem = get_problem(f"dascmop{problem_number}", difficulty)
+        problem._iemoec_problem_id = normalized
+        return problem
     if not _STANDARD.match(normalized):
-        raise ValueError("问题名须为 DTLZ1-7、WFG1-9、ZDT1-6 或 C-DTLZ2")
+        raise ValueError(
+            "问题名须为 DTLZ1-7、WFG1-9、ZDT1-6、约束 C-DTLZ、"
+            "DASCMOP<n>_d<difficulty> 或旧 C-DTLZ2"
+        )
     if normalized.startswith("zdt"):
         if n_obj != 2:
             raise ValueError("ZDT 仅支持 M=2")

@@ -83,10 +83,23 @@ def convergence(root: Path, output: Path) -> None:
             groups[(cfg["problem"], cfg["n_obj"], cfg["algorithm"])].append((cfg, rows))
     for (problem, n_obj, algorithm), runs in groups.items():
         count = min(len(rows) for _, rows in runs)
-        curves = np.asarray([[float(row["igd_plus"]) for row in rows[:count]] for _, rows in runs])
+        curves = np.asarray([
+            [
+                float(row["igd_plus"])
+                if row.get("igd_plus") not in (None, "")
+                else np.nan
+                for row in rows[:count]
+            ]
+            for _, rows in runs
+        ])
         x = np.asarray([float(row["fe"]) for row in runs[0][1][:count]])
-        median = np.median(curves, axis=0)
-        low, high = np.percentile(curves, [25, 75], axis=0)
+        valid_columns = ~np.all(np.isnan(curves), axis=0)
+        if not np.any(valid_columns):
+            continue
+        curves = curves[:, valid_columns]
+        x = x[valid_columns]
+        median = np.nanmedian(curves, axis=0)
+        low, high = np.nanpercentile(curves, [25, 75], axis=0)
         plt.figure(figsize=(6.4, 4.2))
         plt.plot(x, median, label=algorithm_label(runs[0][0]))
         plt.fill_between(x, low, high, alpha=0.25, label="IQR")
@@ -110,7 +123,14 @@ def boxplots(root: Path, output: Path) -> None:
         labels = [values[algorithm][0]["algorithm_label"] for algorithm in algorithms]
         plt.figure(figsize=(7.2, 4.4))
         plt.boxplot(
-            [[row["igd_plus"] for row in values[a]] for a in algorithms],
+            [
+                [
+                    row["igd_plus"]
+                    for row in values[algorithm]
+                    if row.get("igd_plus") is not None
+                ] or [np.nan]
+                for algorithm in algorithms
+            ],
             tick_labels=labels,
             showmeans=True,
         )
@@ -129,6 +149,10 @@ def parallel_coordinates(root: Path, output: Path) -> None:
             cfg = json.load(handle)
         rows = read_csv(path)
         objective_columns = [key for key in rows[0] if key.startswith("f")]
+        if "cv" in rows[0]:
+            rows = [row for row in rows if float(row["cv"]) <= 1e-12]
+        if not rows:
+            continue
         F = np.asarray([[float(row[key]) for key in objective_columns] for row in rows])
         records.append((path, cfg, objective_columns, F))
     bounds = {}

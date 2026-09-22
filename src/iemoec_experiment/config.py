@@ -7,7 +7,7 @@ from typing import Any
 
 
 SUPPORTED_ALGORITHMS = (
-    "NSGA2", "NSGA3", "MOEAD", "MOEADPBI", "RVEA",
+    "NSGA2", "NSGA3", "MOEAD", "MOEADPBI", "RVEA", "CTAEA",
     "AGEMOEA2", "AGEMOEA2STABLE", "IEMOEC",
 )
 DEFAULT_ALGORITHMS = ("NSGA2", "NSGA3", "MOEAD", "IEMOEC")
@@ -18,6 +18,7 @@ ALGORITHM_LABELS = {
     "MOEAD": "MOEA/D-TCH",
     "MOEADPBI": "MOEA/D-PBI",
     "RVEA": "RVEA",
+    "CTAEA": "C-TAEA",
     "AGEMOEA2": "AGE-MOEA2",
     "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
@@ -35,8 +36,12 @@ IEMOEC_SCHEMA_VERSIONS = {
     "s3": 8,
     "principle": 9,
     "s4": 10,
+    "s3_elite_constrained": 11,
 }
-S3_VARIANTS = ("s3_memory", "s3_hybrid", "s3_elite", "s3")
+S3_VARIANTS = (
+    "s3_memory", "s3_hybrid", "s3_elite", "s3",
+    "s3_elite_constrained",
+)
 S3_CONFIG_FIELDS = {
     "direction_memory",
     "direction_memory_capacity",
@@ -209,6 +214,24 @@ class IEMOECConfig:
                 "direction_memory": True,
             },
             "s3_elite": {
+                "initialization_mode": "shared_population",
+                "normalization_mode": "global",
+                "island_initialization": "multi_ancestor",
+                "island_direction_mode": "axis_random",
+                "island_count_multiplier": 2,
+                "diverse_ancestors": 1,
+                "fe_scheduler": "fixed_batch",
+                "outer_batch_ratio": 1.0,
+                "isolated_fe_ratio": 0.50,
+                "shared_fe_ratio": 0.25,
+                "recombination_fe_ratio": 0.25,
+                "outer_survival": "nsga3",
+                "pairing_strategy": "farthest_weight",
+                "local_evolution_mode": "hybrid",
+                "direction_memory": True,
+                "protect_direction_elites": True,
+            },
+            "s3_elite_constrained": {
                 "initialization_mode": "shared_population",
                 "normalization_mode": "global",
                 "island_initialization": "multi_ancestor",
@@ -417,7 +440,7 @@ class IEMOECConfig:
                 or self.adaptive_source_budget
             ):
                 raise ValueError("s3_hybrid 只增加共享后代")
-            if self.variant == "s3_elite" and (
+            if self.variant in ("s3_elite", "s3_elite_constrained") and (
                 not self.protect_direction_elites
                 or self.adaptive_source_budget
             ):
@@ -456,6 +479,21 @@ class ExperimentCase:
         if self.history_points < 1 or self.reference_points < 10 or self.high_dim_hv_samples < 1000:
             raise ValueError("history_points >= 1、reference_points >= 10 且 high_dim_hv_samples >= 1000")
         self.iemoec.validate()
+        from .problems import is_constrained_problem_name
+
+        constrained = is_constrained_problem_name(self.normalized_problem)
+        if constrained and self.normalized_algorithm in ("MOEAD", "MOEADPBI"):
+            raise ValueError(
+                "pymoo 的 MOEA/D 不支持约束问题；请使用明确命名的约束版本"
+            )
+        if self.normalized_algorithm == "IEMOEC":
+            constrained_variant = self.iemoec.variant == "s3_elite_constrained"
+            if constrained and not constrained_variant:
+                raise ValueError(
+                    "约束问题必须使用 IEMOEC variant=s3_elite_constrained"
+                )
+            if constrained_variant and not constrained:
+                raise ValueError("s3_elite_constrained 只能用于约束问题")
 
     @property
     def normalized_algorithm(self) -> str:
@@ -495,6 +533,8 @@ class ExperimentCase:
     def algorithm_label(self) -> str:
         if self.normalized_algorithm != "IEMOEC":
             return ALGORITHM_LABELS[self.normalized_algorithm]
+        if self.iemoec.variant == "s3_elite_constrained":
+            return "IEMOEC-C"
         if self.iemoec.variant in ("principle", "s4"):
             return "IEMOEC-Principle" if self.iemoec.variant == "principle" else "IEMOEC-S4"
         base = {

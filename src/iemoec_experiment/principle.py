@@ -31,7 +31,7 @@ class Lineage:
 
 class PrincipleRunner:
     def __init__(self, problem, case, initial_X, on_checkpoint=None,
-                 on_outer_selection=None):
+                 on_outer_selection=None, on_evaluation=None):
         case.iemoec.validate()
         if problem.n_constr or not np.all(np.isfinite(problem.xl)) or not np.all(np.isfinite(problem.xu)):
             raise ValueError("principle currently supports unconstrained finite continuous boxes only")
@@ -53,6 +53,7 @@ class PrincipleRunner:
         self.mutation = PM(prob=1.0, prob_var=1 / problem.n_var, eta=20)
         self.on_checkpoint = on_checkpoint
         self.on_outer_selection = on_outer_selection
+        self.on_evaluation = on_evaluation
         self.candidate_pool = Population.empty()
         self.outer_records = []
         self.lineage_records = []
@@ -76,6 +77,8 @@ class PrincipleRunner:
             pop.set("lineage_id", np.full(len(pop), lineage_id, dtype=int))
         if len(pop):
             self.evaluator.eval(self.problem, pop)
+            if self.on_evaluation:
+                self.on_evaluation(self.n_eval, pop)
             if self.on_checkpoint:
                 visible = self.candidate_pool if len(self.candidate_pool) else pop
                 self.on_checkpoint(self.n_eval, visible)

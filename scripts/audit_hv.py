@@ -19,17 +19,25 @@ from iemoec_experiment.metrics import MetricSuite  # noqa: E402
 from iemoec_experiment.problems import make_problem  # noqa: E402
 
 
-def read_objectives(path: Path) -> np.ndarray:
+def read_population(path: Path) -> tuple[np.ndarray, np.ndarray | None]:
     with path.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         objective_columns = sorted(
             (name for name in (reader.fieldnames or []) if name.startswith("f")),
             key=lambda name: int(name[1:]),
         )
-        return np.asarray(
-            [[float(row[name]) for name in objective_columns] for row in reader],
+        rows = list(reader)
+        objectives = np.asarray(
+            [[float(row[name]) for name in objective_columns] for row in rows],
             dtype=float,
         )
+        violations = None
+        if reader.fieldnames and "cv" in reader.fieldnames:
+            violations = np.asarray(
+                [[float(row["cv"])] for row in rows],
+                dtype=float,
+            )
+        return objectives, violations
 
 
 def main() -> int:
@@ -60,7 +68,7 @@ def main() -> int:
             continue
         with config_path.open(encoding="utf-8") as handle:
             config = json.load(handle)
-        F = read_objectives(population_path)
+        F, CV = read_population(population_path)
         problem = make_problem(problem_name, n_obj, config.get("n_var"))
         for reference_point in args.reference_points:
             suite = MetricSuite(
@@ -69,7 +77,7 @@ def main() -> int:
                 hv_samples=args.samples,
                 hv_reference_point=reference_point,
             )
-            values = suite.calculate_hv(F)
+            values = suite.calculate_hv(F, CV=CV)
             rows.append({
                 "problem": problem_name,
                 "n_obj": n_obj,

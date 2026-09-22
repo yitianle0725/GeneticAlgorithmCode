@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from pymoo.core.population import Population
 
+from .constraints import FEASIBILITY_TOLERANCE, constraint_violation
 from .normalization import ObjectiveNormalization
 
 
@@ -30,6 +31,7 @@ class DirectionalMemory:
         weights: list[np.ndarray],
         capacity: int,
         stagnation_window: int = 5,
+        constraint_aware: bool = False,
     ) -> None:
         if capacity < 2:
             raise ValueError("方向记忆容量必须至少为 2")
@@ -39,6 +41,7 @@ class DirectionalMemory:
         self.weights = [np.asarray(weight, dtype=float).copy() for weight in weights]
         self.capacity = int(capacity)
         self.stagnation_window = int(stagnation_window)
+        self.constraint_aware = bool(constraint_aware)
         self._populations = [Population.empty() for _ in self.weights]
         self._stagnation = np.zeros(len(self.weights), dtype=int)
 
@@ -109,9 +112,14 @@ class DirectionalMemory:
         candidate_keys: list[bytes],
         normalized_candidate_objectives: np.ndarray,
         candidate_decisions: np.ndarray,
+        candidate_violation: np.ndarray,
         weight: np.ndarray,
         normalization: ObjectiveNormalization,
-    ) -> tuple[Population, float, float | None]:
+    ) -> tuple[
+        Population,
+        tuple[int, float],
+        tuple[int, float] | None,
+    ]:
         """从缓存候选数据更新一个方向，并返回其最优标量值。
 
         逻辑顺序与 ``deduplicate(merge(previous, candidates))`` 完全一致：
@@ -152,15 +160,43 @@ class DirectionalMemory:
             np.asarray(weight, dtype=float) * np.abs(normalized_objectives),
             axis=1,
         )
+        if self.constraint_aware:
+            if previous_count:
+                violation = np.concatenate([
+                    constraint_violation(previous),
+                    candidate_violation[new_candidate_indices],
+                ])
+            else:
+                violation = candidate_violation
+            feasible = violation <= FEASIBILITY_TOLERANCE
+            ranking_scores = np.where(feasible, scores, violation)
+            ordered = np.lexsort((
+                np.arange(len(scores)),
+                ranking_scores,
+                (~feasible).astype(int),
+            ))
+            quality_keys = [
+                (0, float(scores[index]))
+                if feasible[index]
+                else (1, float(violation[index]))
+                for index in range(len(scores))
+            ]
+        else:
+            ordered = np.argsort(scores, kind="stable")
+            quality_keys = [(0, float(score)) for score in scores]
         previous_best = (
-            float(np.min(scores[:previous_count]))
+            min(quality_keys[:previous_count])
             if previous_count
             else None
         )
-        if len(scores) <= self.capacity:
+        if self.constraint_aware:
+            # 第一版约束策略严格采用 feasibility-first。方向记忆容量有限时，
+            # 可行解按原方向标量值竞争；不可行解之间只比较 CV，不允许
+            # 决策空间距离把较差的不可行解提升到较好解之前。
+            selected = ordered[:self.capacity]
+        elif len(scores) <= self.capacity:
             selected = np.arange(len(scores), dtype=int)
         else:
-            ordered = np.argsort(scores, kind="stable")
             shortlist_size = min(len(ordered), self.capacity * 3)
             shortlist = ordered[:shortlist_size]
             chosen = [int(ordered[0])]
@@ -193,7 +229,8 @@ class DirectionalMemory:
         updated = Population.create(
             *(self._copy_individual(individual) for individual in selected_individuals)
         )
-        return updated, float(np.min(scores[selected])), previous_best
+        updated_best = min(quality_keys[int(index)] for index in selected)
+        return updated, updated_best, previous_best
 
     def update(
         self,
@@ -210,6 +247,7 @@ class DirectionalMemory:
             unique_candidates.get("F")
         )
         candidate_decisions = self._normalized_decisions(unique_candidates)
+        candidate_violation = constraint_violation(unique_candidates)
 
         turnovers = []
         for direction_id, weight in enumerate(self.weights):
@@ -224,10 +262,20 @@ class DirectionalMemory:
                 candidate_keys,
                 normalized_candidate_objectives,
                 candidate_decisions,
+                candidate_violation,
                 weight,
                 normalization,
             )
-            if previous_best is None or updated_best < previous_best - 1e-12:
+            improved = previous_best is None
+            if previous_best is not None:
+                improved = (
+                    updated_best[0] < previous_best[0]
+                    or (
+                        updated_best[0] == previous_best[0]
+                        and updated_best[1] < previous_best[1] - 1e-12
+                    )
+                )
+            if improved:
                 self._stagnation[direction_id] = 0
             else:
                 self._stagnation[direction_id] += 1
@@ -257,8 +305,19 @@ class DirectionalMemory:
         selected = []
         for population, weight in zip(self._populations, self.weights):
             scores = normalization.tchebycheff(population.get("F"), weight)
+            if self.constraint_aware:
+                violation = constraint_violation(population)
+                feasible = violation <= FEASIBILITY_TOLERANCE
+                order = np.lexsort((
+                    np.arange(len(population)),
+                    np.where(feasible, scores, violation),
+                    (~feasible).astype(int),
+                ))
+                best = int(order[0])
+            else:
+                best = int(np.argmin(scores))
             selected.append(
-                self._copy_individual(population[int(np.argmin(scores))])
+                self._copy_individual(population[best])
             )
         return Population.create(*selected)
 

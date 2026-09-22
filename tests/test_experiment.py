@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from iemoec_experiment.config import ExperimentCase, IEMOECConfig
+from iemoec_experiment.constraints import feasibility_first_order
 from iemoec_experiment.directional_memory import DirectionalMemory
 from iemoec_experiment.directions import direction_objective, reference_direction_subset
 from iemoec_experiment.factory import make_baseline, reference_directions
@@ -28,7 +29,7 @@ from iemoec_experiment.manifest import build_manifest, validate_result_rows
 from iemoec_experiment.metrics import MetricSuite
 from iemoec_experiment.normalization import ObjectiveNormalization
 from iemoec_experiment.problems import make_problem, standard_problem_dimensions
-from iemoec_experiment.runner import run_case
+from iemoec_experiment.runner import HistoryRecorder, run_case
 from iemoec_experiment.source_budget import SourceBudgetController
 from run import PRESETS, build_parser, resolve_cases
 from summarize import vargha_delaney_a12
@@ -67,10 +68,35 @@ class ProblemTests(unittest.TestCase):
                 self.assertEqual(problem.l, l)
 
     def test_legacy_convex_dtlz2_wrapper_is_finite(self):
-        problem = make_problem("c-dtlz2", 3)
+        problem = make_problem("convex-dtlz2", 3)
         F = problem.evaluate(np.full((4, problem.n_var), 0.5))
         self.assertEqual(F.shape, (4, 3))
         self.assertTrue(np.all(np.isfinite(F)))
+
+    def test_ambiguous_cdtlz2_name_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "有歧义"):
+            make_problem("c-dtlz2", 3)
+
+    def test_constrained_problem_matrix_and_dascmop_difficulty(self):
+        for name in ("c1dtlz1", "c1dtlz3", "c2dtlz2", "c3dtlz4"):
+            for n_obj in (3, 5, 8, 10, 15):
+                with self.subTest(problem=name, n_obj=n_obj):
+                    problem = make_problem(name, n_obj)
+                    self.assertTrue(problem.has_constraints())
+                    self.assertEqual(problem.n_obj, n_obj)
+
+        expected = {
+            4: (0.25, 0.25, 0.25),
+            8: (0.50, 0.50, 0.50),
+            12: (0.75, 0.75, 0.75),
+            16: (0.50, 1.00, 0.50),
+        }
+        for difficulty, factors in expected.items():
+            problem = make_problem(f"dascmop7_d{difficulty}", 3)
+            self.assertEqual(
+                (problem.eta, problem.zeta, problem.gamma),
+                factors,
+            )
 
     def test_reference_population_sizes(self):
         expected = {3: 91, 5: 210, 8: 120, 10: 220, 15: 120}
@@ -153,6 +179,77 @@ class MetricTests(unittest.TestCase):
 
                 self.assertLessEqual(len(suite_a.ref_pf), 100)
                 np.testing.assert_allclose(suite_a.ref_pf, suite_b.ref_pf)
+
+    def test_constrained_metrics_ignore_infeasible_objectives(self):
+        problem = make_problem("c2dtlz2", 3)
+        directions = np.eye(3)
+        suite = MetricSuite(
+            problem,
+            n_reference_points=30,
+            hv_samples=1000,
+            direction_directions=directions,
+        )
+        feasible_F = np.asarray([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        mixed_F = np.vstack([feasible_F, np.zeros(3)])
+
+        feasible_only = suite.calculate(feasible_F, CV=np.zeros((2, 1)))
+        mixed = suite.calculate(mixed_F, CV=np.asarray([[0.0], [0.0], [9.0]]))
+
+        self.assertEqual(mixed["feasible_count"], 2)
+        self.assertAlmostEqual(mixed["feasible_ratio"], 2 / 3)
+        self.assertEqual(mixed["igd_plus"], feasible_only["igd_plus"])
+        self.assertEqual(mixed["hv"], feasible_only["hv"])
+        self.assertEqual(
+            mixed["feasible_direction_coverage"],
+            mixed["direction_occupancy"],
+        )
+
+    def test_constrained_metrics_have_explicit_no_feasible_state(self):
+        problem = make_problem("c1dtlz1", 3)
+        suite = MetricSuite(
+            problem,
+            n_reference_points=30,
+            hv_samples=1000,
+            direction_directions=np.eye(3),
+        )
+        result = suite.calculate(
+            np.asarray([[0.1, 0.1, 0.1]]),
+            CV=np.asarray([[1.0]]),
+        )
+
+        self.assertFalse(result["has_feasible"])
+        self.assertIsNone(result["igd_plus"])
+        self.assertEqual(result["hv"], 0.0)
+        self.assertEqual(result["feasible_direction_coverage"], 0.0)
+
+    def test_c2_reference_front_keeps_high_dimensional_coverage(self):
+        problem = make_problem("c2dtlz2", 15)
+        suite = MetricSuite(problem, n_reference_points=100, hv_samples=1000)
+
+        self.assertEqual(len(suite.ref_pf), 100)
+        np.testing.assert_allclose(suite.ideal, np.zeros(15), atol=1e-12)
+        np.testing.assert_allclose(suite.nadir, np.ones(15), atol=1e-12)
+
+    def test_all_frozen_dascmop_reference_fronts_are_bundled(self):
+        for problem_number in (7, 8, 9):
+            for difficulty in (4, 8, 12, 16):
+                with self.subTest(
+                    problem=problem_number,
+                    difficulty=difficulty,
+                ):
+                    suite = MetricSuite(
+                        make_problem(
+                            f"dascmop{problem_number}_d{difficulty}",
+                            3,
+                        ),
+                        n_reference_points=10,
+                        hv_samples=1000,
+                    )
+                    self.assertEqual(len(suite.ref_pf), 10)
+                    self.assertEqual(
+                        suite.reference_front_method,
+                        "bundled_pymoo_data_pf",
+                    )
 
 
 class StructureHelperTests(unittest.TestCase):
@@ -294,6 +391,73 @@ class RunnerTests(unittest.TestCase):
             no_recombination_case.iemoec.recombination_fe_ratio,
             0.0,
         )
+
+    def test_constrained_presets_match_frozen_experiment_sizes(self):
+        expected = {
+            "constrained_smoke": (48, 4, range(1, 4), 50),
+            "constrained_pilot": (960, 32, range(1, 6), 200),
+            "constrained_formal": (5760, 32, range(31, 61), 400),
+        }
+        for preset, (task_count, scenario_count, seeds, budget_scale) in expected.items():
+            with self.subTest(preset=preset):
+                args = build_parser().parse_args([
+                    "--preset", preset,
+                    "--dry-run",
+                ])
+                cases = resolve_cases(args)
+                self.assertEqual(len(cases), task_count)
+                self.assertEqual(
+                    len({(case.problem, case.n_obj) for case in cases}),
+                    scenario_count,
+                )
+                self.assertEqual({case.seed for case in cases}, set(seeds))
+                self.assertTrue(all(
+                    case.max_fes
+                    == len(reference_directions(case)) * budget_scale
+                    for case in cases
+                ))
+                self.assertTrue(all(
+                    case.iemoec.variant == "s3_elite_constrained"
+                    for case in cases
+                ))
+
+    def test_constrained_schema_label_and_incompatible_algorithms(self):
+        config = IEMOECConfig.for_variant("s3_elite_constrained")
+        case = ExperimentCase(
+            "IEMOEC", "c2dtlz2", 3, 1, 182, iemoec=config
+        )
+        case.validate()
+        self.assertEqual(case.algorithm_schema_version, 11)
+        self.assertEqual(case.algorithm_label, "IEMOEC-C")
+
+        with self.assertRaisesRegex(ValueError, "MOEA/D 不支持约束"):
+            ExperimentCase("MOEAD", "c2dtlz2", 3, 1, 182).validate()
+        with self.assertRaisesRegex(ValueError, "s3_elite_constrained"):
+            ExperimentCase(
+                "IEMOEC",
+                "c2dtlz2",
+                3,
+                1,
+                182,
+                iemoec=IEMOECConfig.for_variant("s4"),
+            ).validate()
+
+    def test_first_feasible_fe_uses_position_inside_evaluation_batch(self):
+        suite = MetricSuite(
+            make_problem("c1dtlz1", 3),
+            n_reference_points=30,
+            hv_samples=1000,
+        )
+        recorder = HistoryRecorder(suite, 100, 2, False)
+        population = Population.new(
+            "X", np.zeros((3, 7)),
+            "F", np.zeros((3, 3)),
+            "CV", np.asarray([[2.0], [0.0], [0.0]]),
+        )
+
+        recorder.observe_evaluated(10, population)
+
+        self.assertEqual(recorder.first_feasible_fe, 9)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -482,6 +646,94 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(before & after)
         self.assertEqual(len(identities), len(set(identities)))
         self.assertEqual(after_external_mutation, after)
+
+    def test_feasibility_first_order_and_memory_never_promote_infeasible(self):
+        problem = make_problem("c2dtlz2", 3)
+        decisions = np.zeros((3, problem.n_var))
+        decisions[:, 0] = np.asarray([0.1, 0.2, 0.3])
+        population = Population.new(
+            "X", decisions,
+            "F", np.asarray([
+                [0.0, 0.0, 0.0],
+                [0.8, 0.2, 0.2],
+                [0.9, 0.1, 0.2],
+            ]),
+            "CV", np.asarray([[0.01], [0.0], [0.0]]),
+        )
+        scores = np.asarray([0.0, 0.8, 0.9])
+
+        order = feasibility_first_order(population, scores)
+        self.assertEqual(order.tolist(), [1, 2, 0])
+
+        memory = DirectionalMemory(
+            problem,
+            [np.asarray([1.0, 1e-3, 1e-3])],
+            capacity=2,
+            constraint_aware=True,
+        )
+        normalization = ObjectiveNormalization.from_objectives(
+            population.get("F")
+        )
+        memory.update(population, normalization)
+        selected_cv = memory.parent_pools()[0].get("CV").reshape(-1)
+        np.testing.assert_allclose(selected_cv, 0.0)
+
+    def test_constrained_elite_protection_excludes_infeasible_solutions(self):
+        config = IEMOECConfig.for_variant("s3_elite_constrained")
+        case = ExperimentCase(
+            "IEMOEC", "c2dtlz2", 3, 1, 182, iemoec=config
+        )
+        problem = make_problem("c2dtlz2", 3)
+        runner = IEMOECRunner(problem, case)
+        population = Population.new(
+            "X", np.zeros((3, problem.n_var)),
+            "F", np.asarray([
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]),
+            "CV", np.asarray([[1.0], [0.0], [0.0]]),
+        )
+        normalization = ObjectiveNormalization.from_objectives(
+            population[1:].get("F")
+        )
+        protected = runner._eligible_direction_elites(
+            population,
+            [np.asarray([1.0, 1e-3, 1e-3])],
+            normalization,
+        )
+
+        self.assertGreater(len(protected), 0)
+        np.testing.assert_allclose(protected.get("CV"), 0.0)
+
+    def test_constrained_baselines_and_iemoec_complete_small_run(self):
+        initialization_hashes = []
+        for algorithm in ("NSGA2", "NSGA3", "CTAEA", "IEMOEC"):
+            with self.subTest(algorithm=algorithm):
+                case = ExperimentCase(
+                    algorithm,
+                    "c2dtlz2",
+                    3,
+                    5,
+                    182,
+                    output_root=str(Path(self.output) / "constrained"),
+                    history_points=2,
+                    reference_points=30,
+                    iemoec=IEMOECConfig.for_variant(
+                        "s3_elite_constrained"
+                    ),
+                )
+                result = run_case(case, force=True)
+
+                self.assertEqual(result["n_eval"], 182)
+                self.assertEqual(result["metric_schema_version"], 6)
+                self.assertIn("feasible_ratio", result)
+                self.assertIn("min_cv", result)
+                self.assertIn("mean_cv", result)
+                self.assertIn("feasible_direction_coverage", result)
+                self.assertIn("first_feasible_fe", result)
+                initialization_hashes.append(result["initialization_hash"])
+        self.assertEqual(len(set(initialization_hashes)), 1)
 
     def test_s3_variants_obey_budget_and_write_diagnostics(self):
         for variant in ("s3_memory", "s3_hybrid", "s3_elite", "s3"):

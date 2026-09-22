@@ -2,7 +2,7 @@
 
 本项目基于 **Python 3.12+** 与 **pymoo 0.6.2**，用于研究和验证多目标极值组合算法
 IEMOEC（Independent Evolution and Multi-objective Extremum Combination）。代码库同时提供
-NSGA-II、NSGA-III、MOEA/D-TCH、MOEA/D-PBI、RVEA 和 AGE-MOEA2-Stable 等公共基线，
+NSGA-II、NSGA-III、MOEA/D-TCH、MOEA/D-PBI、RVEA、C-TAEA 和 AGE-MOEA2-Stable 等公共基线，
 统一问题、初始化、种群规模、函数评价预算、指标和统计流程。
 
 截至 2026-09-21，项目已经完成：
@@ -90,8 +90,8 @@ python -c "import pymoo; print(pymoo.__version__)"
 python -m unittest discover -s tests -v
 ```
 
-当前测试集包含 68 项测试，覆盖公共初始化、FE 审计、指标、S2/S3 结构、S4 封闭谱系、
-有限邻域资格检查、坐标继承、schema 隔离和断点续跑。
+当前测试集包含 80 项测试，覆盖公共初始化、FE 审计、约束指标、feasibility-first、
+S2/S3 结构、S4 封闭谱系、有限邻域资格检查、坐标继承、schema 隔离和断点续跑。
 
 ## 3. 快速开始
 
@@ -125,6 +125,20 @@ python scripts/run.py --preset benchmark_smoke `
 
 相同配置和 run name 可以安全续跑，已经完成的任务会自动跳过。配置发生变化时必须更换
 `--run-name`；即使指定 `--force`，也不允许把不同 algorithm schema 或 metric schema 混入同一目录。
+
+约束第一阶段的 48 项冒烟实验已经固化为独立 preset，并会自动选择
+`s3_elite_constrained`（algorithm schema 11，标签 `IEMOEC-C`）：
+
+```powershell
+python scripts/run.py --preset constrained_smoke `
+  --workers 4 `
+  --run-name constrained_smoke_schema11 `
+  --dry-run
+```
+
+确认任务数为 48 后去掉 `--dry-run`。后续两阶段分别使用 `constrained_pilot`
+（960 项，seeds 1–5，`200N`）和 `constrained_formal`（5760 项，seeds 31–60，`400N`）。
+约束 preset 不包含 MOEA/D，因为 pymoo 0.6.2 的 MOEA/D 明确不支持约束问题。
 
 ## 4. 公平实验口径
 
@@ -166,8 +180,10 @@ python scripts/run.py --preset benchmark_smoke `
 | `s3` | 8 | 增加贡献驱动的自适应来源预算，实验上未取代 S3-Elite |
 | `principle` | 9 | 第一版忠实原理实现；存在等待全部谱系合格的调度缺陷 |
 | `s4` | 10 | 当前原理验证版：异步资格触发、多尺度有限邻域检查 |
+| `s3_elite_constrained` | 11 | IEMOEC-C：S3-Elite + 统一 feasibility-first 约束处理 |
 
-统一 CLI 默认 variant 仍是 `s2`，目的是保持旧命令兼容。运行当前性能版本时必须显式写：
+普通 preset 的 CLI 默认 variant 仍是 `s2`，目的是保持旧命令兼容；约束 preset 会自动选择
+`s3_elite_constrained`。运行无约束当前性能版本时必须显式写：
 
 ```text
 --iemoec-variant s3_elite
@@ -405,7 +421,7 @@ docs/
 - 旧自实现 baseline、DTLZ/WFG、遗传算子和指标已经移除，公共组件统一复用 pymoo；
 - S3-Elite 的正式优势是经验结果，不构成极值组合理论的数学证明；
 - S4 的有限邻域“极值资格”不能称为严格驻点或 KKT 证书；
-- 当前研究对象是无约束、有限边界的连续多目标问题；
+- 性能线同时覆盖无约束与约束、有限边界的连续多目标问题；S4 仍只支持无约束问题；
 - formal 使用 `400N`，pilot 通常使用 `200N`，二者不能直接拼接 seeds；
 - 修改算法行为必须提升 algorithm schema 并使用新 run name；纯等价性能优化可以保留 schema，
   但必须用固定 seed 回归确认最终种群和诊断记录不变。

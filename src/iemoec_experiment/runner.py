@@ -9,14 +9,16 @@ from pathlib import Path
 
 import numpy as np
 from pymoo.core.callback import Callback
+from pymoo.core.population import Population
 from pymoo.optimize import minimize
 
 from .config import ExperimentCase
+from .constraints import feasible_mask
 from .factory import make_baseline, reference_directions
 from .iemoec import IEMOECRunner
 from .principle import PrincipleRunner
 from .initialization import initialization_hash, shared_initial_decisions
-from .metrics import METRIC_SCHEMA_VERSION, MetricSuite
+from .metrics import MetricSuite, metric_schema_version_for_problem
 from .problems import make_problem
 
 
@@ -28,23 +30,56 @@ def _json_dump(path: Path, data) -> None:
 
 
 class HistoryRecorder(Callback):
-    def __init__(self, suite: MetricSuite, max_fes: int, n_points: int, include_hv: bool):
+    def __init__(
+        self,
+        suite: MetricSuite,
+        max_fes: int,
+        n_points: int,
+        include_hv: bool,
+        record_checkpoints: bool = True,
+    ):
         super().__init__()
         self.suite = suite
         self.thresholds = np.unique(
             np.linspace(max_fes / n_points, max_fes, n_points, dtype=int)
         )
         self.include_hv = include_hv
+        self.record_checkpoints = record_checkpoints
         self.rows: list[dict] = []
         self.started = time.perf_counter()
         self._next = 0
+        self.first_feasible_fe: int | None = None
+
+    def observe_evaluated(self, n_eval: int, population) -> None:
+        """按评价批次中的稳定顺序记录首次可行解对应的精确 FE。"""
+        if (
+            self.suite.constrained
+            and self.first_feasible_fe is None
+        ):
+            feasible_indices = np.flatnonzero(feasible_mask(population))
+            if len(feasible_indices):
+                batch_start = int(n_eval) - len(population)
+                self.first_feasible_fe = batch_start + int(feasible_indices[0]) + 1
+
+    def _observe_population(self, n_eval: int, population) -> None:
+        """为没有评价批次信息的调用保留保守的代末记录。"""
+        if (
+            self.suite.constrained
+            and self.first_feasible_fe is None
+            and np.any(feasible_mask(population))
+        ):
+            self.first_feasible_fe = int(n_eval)
 
     def record(self, n_eval: int, population) -> None:
         if population is None or len(population) == 0:
             return
+        self._observe_population(n_eval, population)
         while self._next < len(self.thresholds) and n_eval >= self.thresholds[self._next]:
             checkpoint_fe = int(self.thresholds[self._next])
-            values = self.suite.calculate(population.get("F"), include_hv=self.include_hv)
+            values = self.suite.calculate_population(
+                population,
+                include_hv=self.include_hv,
+            )
             self.rows.append({
                 "fe": checkpoint_fe,
                 "observed_fe": int(n_eval),
@@ -57,7 +92,11 @@ class HistoryRecorder(Callback):
 
     def record_event(self, n_eval: int, population, event: str) -> dict:
         """记录检查点之外的重要算法状态，例如 IEMOEC 外层筛选。"""
-        values = self.suite.calculate(population.get("F"), include_hv=self.include_hv)
+        self._observe_population(n_eval, population)
+        values = self.suite.calculate_population(
+            population,
+            include_hv=self.include_hv,
+        )
         row = {
             "fe": int(n_eval),
             "observed_fe": int(n_eval),
@@ -71,6 +110,7 @@ class HistoryRecorder(Callback):
 
     def finalize(self, n_eval: int, population, final_values: dict) -> None:
         """保证历史末行与最终 metrics 使用同一批目标值和指标。"""
+        self._observe_population(n_eval, population)
         final_row = {
             "fe": int(n_eval),
             "observed_fe": int(n_eval),
@@ -84,7 +124,14 @@ class HistoryRecorder(Callback):
         self.rows.append(final_row)
 
     def notify(self, algorithm):
-        self.record(int(algorithm.evaluator.n_eval), algorithm.pop)
+        n_eval = int(algorithm.evaluator.n_eval)
+        evaluated = algorithm.off if algorithm.off is not None else algorithm.pop
+        if evaluated is not None and not isinstance(evaluated, Population):
+            evaluated = Population.create(evaluated)
+        if evaluated is not None and len(evaluated):
+            self.observe_evaluated(n_eval, evaluated)
+        if self.record_checkpoints:
+            self.record(n_eval, algorithm.pop)
 
 
 def _write_history(path: Path, rows: list[dict]) -> None:
@@ -94,6 +141,8 @@ def _write_history(path: Path, rows: list[dict]) -> None:
         preferred = [
             "fe", "observed_fe", "runtime_seconds", "event", "population_size",
             "igd_plus", "gd_plus", "hv", "spacing", "direction_occupancy",
+            "feasible_direction_coverage", "has_feasible", "feasible_count",
+            "feasible_ratio", "min_cv", "mean_cv",
             "hv_reference_point", "hv_eligible_solution_count", "onvg", "nd_ratio",
         ]
         available = {key for row in rows for key in row}
@@ -107,16 +156,29 @@ def _write_history(path: Path, rows: list[dict]) -> None:
 def _write_population(path: Path, population) -> None:
     X = np.asarray(population.get("X"), dtype=float)
     F = np.asarray(population.get("F"), dtype=float)
+    arrays = [X, F]
     columns = [f"x{i + 1}" for i in range(X.shape[1])] + [
         f"f{i + 1}" for i in range(F.shape[1])
     ]
+    G = np.asarray(population.get("G"), dtype=float)
+    H = np.asarray(population.get("H"), dtype=float)
+    if G.ndim == 2 and G.shape[1]:
+        arrays.append(G)
+        columns.extend(f"g{i + 1}" for i in range(G.shape[1]))
+    if H.ndim == 2 and H.shape[1]:
+        arrays.append(H)
+        columns.extend(f"h{i + 1}" for i in range(H.shape[1]))
+    if (G.ndim == 2 and G.shape[1]) or (H.ndim == 2 and H.shape[1]):
+        CV = np.asarray(population.get("CV"), dtype=float).reshape(len(population), -1)
+        arrays.append(CV[:, :1])
+        columns.append("cv")
     provenance = population.get("provenance")
     if provenance is not None:
         columns.append("provenance")
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
-        for index, values in enumerate(np.hstack([X, F])):
+        for index, values in enumerate(np.hstack(arrays)):
             row = values.tolist()
             if provenance is not None:
                 row.append(provenance[index])
@@ -135,7 +197,8 @@ def _is_complete(case: ExperimentCase) -> bool:
             metrics = json.load(handle)
         return (
             config_matches
-            and metrics.get("metric_schema_version") == METRIC_SCHEMA_VERSION
+            and metrics.get("metric_schema_version")
+            == metric_schema_version_for_problem(case.normalized_problem)
         )
     except (OSError, json.JSONDecodeError):
         return False
@@ -143,6 +206,9 @@ def _is_complete(case: ExperimentCase) -> bool:
 
 def run_case(case: ExperimentCase, force: bool = False) -> dict:
     case.validate()
+    metric_schema_version = metric_schema_version_for_problem(
+        case.normalized_problem
+    )
     if _is_complete(case) and not force:
         return {"status": "skipped", "output_dir": str(case.output_dir), **case.to_dict()}
 
@@ -177,13 +243,13 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
                 )
         except (OSError, json.JSONDecodeError, AttributeError):
             previous_metric_schema = None
-        if previous_metric_schema != METRIC_SCHEMA_VERSION:
+        if previous_metric_schema != metric_schema_version:
             raise RuntimeError(
                 f"{output_dir} 使用旧 metric schema；"
                 "为保持指标可比性，请更换 --run-name"
             )
-    _json_dump(config_path, case.to_dict())
     problem = make_problem(case.normalized_problem, case.n_obj, case.n_var)
+    _json_dump(config_path, case.to_dict())
     pop_size = len(reference_directions(case))
     initial_size = pop_size
     if case.normalized_algorithm == "IEMOEC" and case.iemoec.variant in ("principle", "s4"):
@@ -196,7 +262,13 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         case.high_dim_hv_samples,
         direction_directions=reference_directions(case),
     )
-    history = HistoryRecorder(suite, case.max_fes, case.history_points, case.history_hv)
+    history = HistoryRecorder(
+        suite,
+        case.max_fes,
+        case.history_points,
+        case.history_hv,
+        record_checkpoints=not case.timing_only,
+    )
     algorithm_started = time.perf_counter()
 
     extra = {}
@@ -220,6 +292,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
                     "outer_selection",
                 )
             ),
+            on_evaluation=history.observe_evaluated,
         )
         population, outer_iterations = algorithm.run()
         n_eval = algorithm.n_eval
@@ -269,7 +342,7 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
             algorithm,
             termination=termination,
             seed=case.seed,
-            callback=Callback() if case.timing_only else history,
+            callback=history,
             verbose=False,
             save_history=False,
         )
@@ -283,11 +356,11 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     if not np.all(np.isfinite(F)):
         raise RuntimeError("最终目标值含 NaN/Inf")
     metric_started = time.perf_counter()
-    final_values = suite.calculate(F, include_hv=True)
+    final_values = suite.calculate_population(population, include_hv=True)
     metric_runtime = time.perf_counter() - metric_started
     history.finalize(n_eval, population, final_values)
     metrics = {
-        "metric_schema_version": METRIC_SCHEMA_VERSION,
+        "metric_schema_version": metric_schema_version,
         "algorithm_schema_version": case.algorithm_schema_version,
         "algorithm_variant": case.algorithm_variant,
         "algorithm": case.normalized_algorithm,
@@ -308,6 +381,8 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         **final_values,
         **extra,
     }
+    if suite.constrained:
+        metrics["first_feasible_fe"] = history.first_feasible_fe
     io_started = time.perf_counter()
     _write_history(output_dir / "history.csv", history.rows)
     if case.normalized_algorithm == "IEMOEC":

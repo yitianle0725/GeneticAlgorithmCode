@@ -13,6 +13,7 @@ from pymoo.operators.sampling.rnd import FloatRandomSampling
 from pymoo.util.ref_dirs import get_reference_directions
 
 from .config import ExperimentCase, default_ref_partitions
+from .problems import is_constrained_problem_name
 
 
 def reference_directions(case: ExperimentCase):
@@ -33,6 +34,13 @@ def make_baseline(case: ExperimentCase, initial_X=None):
     algorithm = case.normalized_algorithm
     if algorithm == "IEMOEC":
         raise ValueError("IEMOEC 由自定义 runner 创建")
+    if (
+        algorithm in ("MOEAD", "MOEADPBI")
+        and is_constrained_problem_name(case.normalized_problem)
+    ):
+        raise ValueError(
+            "pymoo 的 MOEA/D 不支持约束问题；不能通过隐式罚函数继续沿用该名称"
+        )
     ref_dirs = reference_directions(case)
     pop_size = len(ref_dirs)
     operators = make_operators(initial_X)
@@ -69,6 +77,14 @@ def make_baseline(case: ExperimentCase, initial_X=None):
 
         return (
             RVEA(ref_dirs=ref_dirs, pop_size=pop_size, **operators),
+            pop_size,
+            ref_dirs,
+        )
+    if algorithm == "CTAEA":
+        from pymoo.algorithms.moo.ctaea import CTAEA
+
+        return (
+            CTAEA(ref_dirs=ref_dirs, **operators),
             pop_size,
             ref_dirs,
         )
