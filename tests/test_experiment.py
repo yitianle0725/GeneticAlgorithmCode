@@ -32,7 +32,12 @@ from iemoec_experiment.problems import make_problem, standard_problem_dimensions
 from iemoec_experiment.runner import HistoryRecorder, run_case
 from iemoec_experiment.source_budget import SourceBudgetController
 from run import PRESETS, build_parser, resolve_cases
-from summarize import vargha_delaney_a12
+from summarize import (
+    audit_constraint_rows,
+    constraint_summary,
+    feasibility_comparison,
+    vargha_delaney_a12,
+)
 
 
 class ProblemTests(unittest.TestCase):
@@ -338,6 +343,67 @@ class StructureHelperTests(unittest.TestCase):
         self.assertEqual(vargha_delaney_a12(target, competitor, True), 1.0)
         self.assertEqual(vargha_delaney_a12(target, competitor, False), 0.0)
 
+    def test_constraint_summary_keeps_failed_runs_visible(self):
+        def row(algorithm, seed, feasible, min_cv, first_feasible_fe):
+            return {
+                "problem": "c1dtlz1",
+                "n_obj": 3,
+                "algorithm": algorithm,
+                "algorithm_label": algorithm,
+                "seed": seed,
+                "population_size": 10,
+                "feasible_count": 2 if feasible else 0,
+                "feasible_ratio": 0.2 if feasible else 0.0,
+                "feasible_direction_coverage": 0.1 if feasible else 0.0,
+                "has_feasible": feasible,
+                "min_cv": min_cv,
+                "mean_cv": min_cv + 0.5,
+                "first_feasible_fe": first_feasible_fe,
+                "max_fes": 100,
+                "igd_plus": 0.5 if feasible else None,
+                "gd_plus": 0.4 if feasible else None,
+                "hv": 0.2 if feasible else 0.0,
+            }
+
+        rows = [
+            row("IEMOEC", 1, True, 0.0, 40),
+            row("IEMOEC", 2, False, 1.0, None),
+            row("NSGA2", 1, False, 3.0, None),
+            row("NSGA2", 2, False, 2.0, None),
+        ]
+
+        audit = audit_constraint_rows(rows)
+        summaries = constraint_summary(rows)
+        comparison = feasibility_comparison(rows, "IEMOEC")[0]
+
+        self.assertEqual(audit["no_feasible_rows"], 3)
+        iemoec = next(row for row in summaries if row["algorithm"] == "IEMOEC")
+        self.assertEqual(iemoec["feasible_runs"], 1)
+        self.assertEqual(iemoec["quality_valid_runs"], 1)
+        self.assertEqual(iemoec["feasibility_success_rate"], 0.5)
+        self.assertEqual(comparison["target_feasibility_wins"], 1)
+        self.assertEqual(comparison["both_infeasible"], 1)
+        self.assertEqual(
+            comparison["target_lower_cv_when_both_infeasible"],
+            1,
+        )
+
+        rows[1]["igd_plus"] = 99.0
+        with self.assertRaisesRegex(RuntimeError, "质量指标定义错误"):
+            audit_constraint_rows(rows)
+
+        self.assertEqual(
+            feasibility_comparison([
+                {
+                    "problem": "dtlz2",
+                    "n_obj": 3,
+                    "algorithm": "IEMOEC",
+                    "seed": 1,
+                }
+            ], "IEMOEC"),
+            [],
+        )
+
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
@@ -420,6 +486,14 @@ class RunnerTests(unittest.TestCase):
                     case.iemoec.variant == "s3_elite_constrained"
                     for case in cases
                 ))
+                if preset != "constrained_smoke":
+                    self.assertEqual(
+                        {case.algorithm for case in cases},
+                        {
+                            "NSGA2", "NSGA3", "RVEA", "AGEMOEA2STABLE",
+                            "CTAEA", "IEMOEC",
+                        },
+                    )
 
     def test_constrained_schema_label_and_incompatible_algorithms(self):
         config = IEMOECConfig.for_variant("s3_elite_constrained")
@@ -708,7 +782,9 @@ class RunnerTests(unittest.TestCase):
 
     def test_constrained_baselines_and_iemoec_complete_small_run(self):
         initialization_hashes = []
-        for algorithm in ("NSGA2", "NSGA3", "CTAEA", "IEMOEC"):
+        for algorithm in (
+            "NSGA2", "NSGA3", "RVEA", "AGEMOEA2STABLE", "CTAEA", "IEMOEC",
+        ):
             with self.subTest(algorithm=algorithm):
                 case = ExperimentCase(
                     algorithm,

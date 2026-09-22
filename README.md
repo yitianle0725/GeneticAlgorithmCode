@@ -140,6 +140,30 @@ python scripts/run.py --preset constrained_smoke `
 （960 项，seeds 1–5，`200N`）和 `constrained_formal`（5760 项，seeds 31–60，`400N`）。
 约束 preset 不包含 MOEA/D，因为 pymoo 0.6.2 的 MOEA/D 明确不支持约束问题。
 
+第二阶段先核对 960 项清单，再启动可断点续跑的 pilot：
+
+```powershell
+python scripts/run.py --preset constrained_pilot `
+  --workers 4 `
+  --run-name constrained_pilot_schema11 `
+  --dry-run
+
+python scripts/run.py --preset constrained_pilot `
+  --workers 4 `
+  --run-name constrained_pilot_schema11
+```
+
+完成后执行：
+
+```powershell
+python scripts/summarize.py results/constrained_pilot_schema11 --target IEMOEC
+```
+
+除通用 `summary.csv`、Wilcoxon–Holm 和 Friedman 输出外，约束实验还会生成
+`constraint_summary.csv` 与 `feasibility_comparison.csv`。前者保留无可行解运行并汇总
+可行成功率、最终可行率、CV 和首次可行 FE；后者按相同 seed 比较算法的可行性胜负。
+无可行解运行不会被插补为虚构的 IGD+。
+
 ## 4. 公平实验口径
 
 平台遵循以下共同规则：

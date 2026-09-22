@@ -142,6 +142,208 @@ def summarize(rows: list[dict]) -> list[dict]:
     return output
 
 
+def constraint_summary(rows: list[dict]) -> list[dict]:
+    """单独汇总约束可行性，避免只看有 IGD+ 的成功运行。"""
+    groups = defaultdict(list)
+    for row in rows:
+        if "has_feasible" in row:
+            groups[(row["problem"], row["n_obj"], row["algorithm"])].append(row)
+
+    output = []
+    for (problem, n_obj, algorithm), values in sorted(groups.items()):
+        first_feasible = np.asarray([
+            value["first_feasible_fe"]
+            for value in values
+            if value.get("first_feasible_fe") is not None
+        ], dtype=float)
+        first_feasible_ratios = np.asarray([
+            value["first_feasible_fe"] / value["max_fes"]
+            for value in values
+            if value.get("first_feasible_fe") is not None
+        ], dtype=float)
+        feasible_ratios = np.asarray(
+            [value["feasible_ratio"] for value in values],
+            dtype=float,
+        )
+        min_cv = np.asarray([value["min_cv"] for value in values], dtype=float)
+        mean_cv = np.asarray([value["mean_cv"] for value in values], dtype=float)
+        direction_coverage = np.asarray([
+            value["feasible_direction_coverage"] for value in values
+        ], dtype=float)
+        feasible_runs = sum(bool(value["has_feasible"]) for value in values)
+        output.append({
+            "problem": problem,
+            "n_obj": n_obj,
+            "algorithm": algorithm,
+            "algorithm_label": values[0].get(
+                "algorithm_label",
+                ALGORITHM_LABELS.get(algorithm, algorithm),
+            ),
+            "n_runs": len(values),
+            "feasible_runs": feasible_runs,
+            "no_feasible_runs": len(values) - feasible_runs,
+            "feasibility_success_rate": feasible_runs / len(values),
+            "quality_valid_runs": sum(
+                value.get("igd_plus") is not None for value in values
+            ),
+            "feasible_ratio_mean": float(np.mean(feasible_ratios)),
+            "feasible_ratio_median": float(np.median(feasible_ratios)),
+            "min_cv_mean": float(np.mean(min_cv)),
+            "min_cv_median": float(np.median(min_cv)),
+            "mean_cv_mean": float(np.mean(mean_cv)),
+            "mean_cv_median": float(np.median(mean_cv)),
+            "feasible_direction_coverage_mean": float(
+                np.mean(direction_coverage)
+            ),
+            "feasible_direction_coverage_median": float(
+                np.median(direction_coverage)
+            ),
+            "first_feasible_fe_n_valid": len(first_feasible),
+            "first_feasible_fe_median": (
+                float(np.median(first_feasible))
+                if len(first_feasible)
+                else None
+            ),
+            "first_feasible_budget_ratio_median": (
+                float(np.median(first_feasible_ratios))
+                if len(first_feasible_ratios)
+                else None
+            ),
+        })
+    return output
+
+
+def feasibility_comparison(rows: list[dict], target: str) -> list[dict]:
+    """按配对 seed 报告目标算法的可行性胜负，不对失败运行插补 IGD+。"""
+    constrained_rows = [row for row in rows if "has_feasible" in row]
+    if not constrained_rows:
+        return []
+    lookup = {
+        (row["problem"], row["n_obj"], row["algorithm"], row["seed"]): row
+        for row in constrained_rows
+    }
+    instances = sorted({
+        (row["problem"], row["n_obj"])
+        for row in constrained_rows
+    })
+    algorithms = sorted({
+        row["algorithm"]
+        for row in constrained_rows
+        if row["algorithm"] != target
+    })
+    output = []
+    for problem, n_obj in instances:
+        for algorithm in algorithms:
+            seeds = sorted({
+                row["seed"]
+                for row in constrained_rows
+                if row["problem"] == problem
+                and row["n_obj"] == n_obj
+                and (problem, n_obj, target, row["seed"]) in lookup
+                and (problem, n_obj, algorithm, row["seed"]) in lookup
+            })
+            if not seeds:
+                continue
+            target_rows = [lookup[(problem, n_obj, target, seed)] for seed in seeds]
+            competitor_rows = [
+                lookup[(problem, n_obj, algorithm, seed)] for seed in seeds
+            ]
+            target_wins = competitor_wins = both_feasible = both_infeasible = 0
+            target_lower_cv = competitor_lower_cv = equal_cv = 0
+            for target_row, competitor_row in zip(target_rows, competitor_rows):
+                target_feasible = bool(target_row.get("has_feasible"))
+                competitor_feasible = bool(competitor_row.get("has_feasible"))
+                if target_feasible and not competitor_feasible:
+                    target_wins += 1
+                elif competitor_feasible and not target_feasible:
+                    competitor_wins += 1
+                elif target_feasible:
+                    both_feasible += 1
+                else:
+                    both_infeasible += 1
+                    if target_row["min_cv"] < competitor_row["min_cv"]:
+                        target_lower_cv += 1
+                    elif competitor_row["min_cv"] < target_row["min_cv"]:
+                        competitor_lower_cv += 1
+                    else:
+                        equal_cv += 1
+            output.append({
+                "problem": problem,
+                "n_obj": n_obj,
+                "target": target,
+                "competitor": algorithm,
+                "n_pairs": len(seeds),
+                "target_feasible_runs": sum(
+                    bool(row.get("has_feasible")) for row in target_rows
+                ),
+                "competitor_feasible_runs": sum(
+                    bool(row.get("has_feasible")) for row in competitor_rows
+                ),
+                "target_feasibility_wins": target_wins,
+                "competitor_feasibility_wins": competitor_wins,
+                "both_feasible": both_feasible,
+                "both_infeasible": both_infeasible,
+                "target_lower_cv_when_both_infeasible": (
+                    target_lower_cv
+                ),
+                "competitor_lower_cv_when_both_infeasible": competitor_lower_cv,
+                "equal_cv_when_both_infeasible": equal_cv,
+            })
+    return output
+
+
+def audit_constraint_rows(rows: list[dict]) -> dict:
+    """检查约束结果中可行性字段与质量指标是否自洽。"""
+    constrained_rows = [row for row in rows if "has_feasible" in row]
+    errors = []
+    for row in constrained_rows:
+        identity = (
+            row["problem"], row["n_obj"], row["algorithm"], row["seed"]
+        )
+        population_size = int(row["population_size"])
+        feasible_count = int(row["feasible_count"])
+        has_feasible = bool(row["has_feasible"])
+        if has_feasible != (feasible_count > 0):
+            errors.append(f"{identity}: has_feasible 与 feasible_count 不一致")
+        if not 0 <= feasible_count <= population_size:
+            errors.append(f"{identity}: feasible_count 越界")
+        expected_ratio = feasible_count / max(1, population_size)
+        if not np.isclose(row["feasible_ratio"], expected_ratio):
+            errors.append(f"{identity}: feasible_ratio 不一致")
+        if row["min_cv"] < 0 or row["mean_cv"] < 0:
+            errors.append(f"{identity}: CV 不能为负")
+        if row["min_cv"] > row["mean_cv"] + 1e-12:
+            errors.append(f"{identity}: min_cv 不能大于 mean_cv")
+        coverage = row["feasible_direction_coverage"]
+        if not 0.0 <= coverage <= 1.0:
+            errors.append(f"{identity}: feasible_direction_coverage 越界")
+        first_feasible_fe = row.get("first_feasible_fe")
+        if has_feasible:
+            if first_feasible_fe is None:
+                errors.append(f"{identity}: 缺少 first_feasible_fe")
+            elif not 1 <= int(first_feasible_fe) <= int(row["max_fes"]):
+                errors.append(f"{identity}: first_feasible_fe 越界")
+        elif first_feasible_fe is not None:
+            errors.append(f"{identity}: 无可行解却记录了 first_feasible_fe")
+        if not has_feasible and (
+            row.get("igd_plus") is not None
+            or row.get("gd_plus") is not None
+            or row.get("hv") != 0.0
+        ):
+            errors.append(f"{identity}: 无可行解时质量指标定义错误")
+    if errors:
+        preview = "; ".join(errors[:5])
+        raise RuntimeError(f"约束结果审计失败，共 {len(errors)} 项：{preview}")
+    return {
+        "constrained_rows": len(constrained_rows),
+        "feasible_rows": sum(bool(row["has_feasible"]) for row in constrained_rows),
+        "no_feasible_rows": sum(
+            not bool(row["has_feasible"]) for row in constrained_rows
+        ),
+        "errors": 0,
+    }
+
+
 def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
     lookup = {(r["problem"], r["n_obj"], r["algorithm"], r["seed"]): r for r in rows}
     instances = sorted({(r["problem"], r["n_obj"]) for r in rows})
@@ -276,11 +478,21 @@ def main() -> int:
         parser.error(str(exc))
     if not rows:
         raise SystemExit(f"未在 {args.results} 找到 metrics.json")
+    constraint_audit = audit_constraint_rows(rows)
     write_csv(args.results / "summary.csv", summarize(rows))
+    write_csv(
+        args.results / "constraint_summary.csv",
+        constraint_summary(rows),
+    )
+    write_csv(
+        args.results / "feasibility_comparison.csv",
+        feasibility_comparison(rows, args.target),
+    )
     write_csv(args.results / "wilcoxon_holm.csv", paired_tests(rows, args.target, args.alpha))
     with (args.results / "friedman.json").open("w", encoding="utf-8") as handle:
         json.dump(friedman_report(rows), handle, ensure_ascii=False, indent=2)
     with (args.results / "summary_validation.json").open("w", encoding="utf-8") as handle:
+        validation["constraint_audit"] = constraint_audit
         json.dump(validation, handle, ensure_ascii=False, indent=2)
     print(f"已汇总 {len(rows)} 次独立运行: {args.results}")
     return 0
