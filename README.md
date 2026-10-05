@@ -182,6 +182,7 @@ python scripts/summarize.py results/constrained_pilot_schema11 --target IEMOEC
 |---:|---:|---:|---:|
 | 2 | 100 | 20000 | 40000 |
 | 3 | 91 | 18200 | 36400 |
+| 4 | 84 | 16800 | 33600 |
 | 5 | 210 | 42000 | 84000 |
 | 8 | 120 | 24000 | 48000 |
 | 10 | 220 | 44000 | 88000 |
@@ -422,6 +423,7 @@ src/iemoec_experiment/
   source_budget.py        S3 固定/自适应来源预算
   iemoec.py               S2/S3 算法核心
   principle.py            principle/S4 原理验证核心
+  iemoeo.py               IE-MOEO 独立进化与变量块组合核心
   metrics.py              参考前沿与质量指标
   manifest.py             实验任务清单
   runner.py               单任务执行、计时和标准输出
@@ -434,6 +436,7 @@ scripts/
 tests/
   test_experiment.py       实验平台与 S2/S3 测试
   test_principle.py        principle/S4 测试
+  test_iemoeo.py           IE-MOEO 机制、预算、复现与集成测试
 docs/
   第二次formal实验0920.md   当前正式实验报告
   实验改进方案0912.md      S3 设计与实验方案
@@ -453,3 +456,71 @@ docs/
 下一阶段优先研究：修正精英保护后的方向占用、降低 M=3 退化、改善 DTLZ1–4 的规则前沿表现，
 以及为 WFG6/9 引入对变量关联更友好的亲本选择。任何新版本都应先小规模机制验证，再使用独立 seeds
 进行确认，而不是直接重跑并反复调参全部 formal。
+
+## 13. IE-MOEO
+
+`IEMOEO`（标签 `IE-MOEO`，独立 algorithm schema 1）新增为独立算法。
+本研究线将既有 IEMOEC 作为**前期对照版本**，其结果不能归因到隔离、亲本选择或块组合中的单一机制。
+新增实现不修改 IEMOEC 的版本配置、算法核心和历史结果格式。
+
+IE-MOEO 每轮从起源者重新变异生成小群体，在各群体内部用归一化加权和竞争，
+选出代表并进行邻域支配检查，再执行变量块组合、变异、修复和全局环境选择。
+默认 `P=max(2, ceil(0.2N))`、小群体大小 20、局部代数 1、亲本池上限 10、组合对数上限 25。
+三目标的 `N=91, P=19`，四目标的 `N=84, P=17`。
+
+```powershell
+python scripts/run.py --preset custom `
+  --algorithms IEMOEO IEMOEC NSGA3 `
+  --iemoec-variant s3_elite `
+  --problems dtlz2 --objectives 3,4 --seeds 1 `
+  --evals-per-pop 100 --workers 1 `
+  --run-name smoke_iemoeo_s3 --verbose-fe
+```
+
+算法名支持大小写。`--iemoec-variant` 只选择 IEMOEC 的前期对照版本；省略时仍按原规则使用 S2。
+
+| 参数 | 含义 |
+|---|---|
+| `--objective-weights 0.25 0.25 0.25 0.25` | 所有小群体共用的局部竞争及 ASF 偏好权重，默认等权；数量必须等于目标数、和为 1 |
+| `--normalization-mode global` | 每轮从新建小群体的联合目标建立公共尺度，局部进化期间冻结 |
+| `--normalization-mode legacy` | 局部交配/选择时从相应候选池建立尺度；跨群体亲本排序仍用本轮公共尺度 |
+| `--principle-probe-radius 0.01` | 决策变量归一化后的欧氏邻域半径；0 时全部代表入选，增大时筛选更严 |
+| `--parent-pool-limit 10` | 资格池按非支配等级、同级按归一化加权和选取亲本的数量上限 |
+| `--combination-pairs-limit 25` | 无放回抽取不同亲本索引对的上限，每对产生一个候选后代 |
+| `--block-size 4` | uniform 的块数；大于变量数时每个坐标独立成块 |
+| `--block-mode uniform/known_separable` | 坐标等分或 DTLZ/WFG 位置与距离变量两块 |
+| `--combination-method structured/random_coord/sbx_only` | 整块继承、逐坐标继承或 SBX 对照 |
+| `--no-isolation` | 局部进化的交配池改为全部小群体的联合池 |
+| `--no-parent-check` | 所有小群体代表直接进入资格池 |
+| `--no-block-combination` | 组合阶段改用 SBX，仍执行变异与修复 |
+| `--no-diversity-maintenance` | 全局选择按等级填充，末层随机截断，不使用拥挤距离 |
+| `--no-elitist-pool` | 全局候选只取资格池与组合后代 |
+
+`--origin-ratio`、`--island-population`、`--inner-generations-early/late` 沿用公共入口；
+新算法仅支持无约束连续问题，默认修复为裁剪到变量边界。
+代码中的 `runner.repair(problem, X)` 可替换成后续网络问题的修复函数。
+已评价决策按完整坐标缓存，重复候选不会再次计费，因此实际扩群 FE 可能小于 `P×n_g`。
+预算不足时按起源者交错顺序截断评价批次；结束时对当前可用候选进行合并与选择，返回非支配前沿。
+如果尚有 FE，而去重后的候选不足 P 个，当前明确报错，因为规格没有定义该边界的补足规则；
+不会静默缩减起源者数或引入未规定的新解。预算已经耗尽时无需构造完整下一代，直接保留最终前沿。
+连续 20 轮都没有新决策时明确报错，不通过重复评价或额外随机重启虚构预算消耗。
+
+新增输出：
+
+- `iemoeo_diagnostics.csv`：每轮扩群、局部进化、组合 FE；原始资格入选率、保底标记、跨群体亲本数。
+- `metrics.json` 的 `evaluation_breakdown`：起源者初始化、首次扩群、后续重建、局部进化、组合；合并选择为 0 FE。
+- `baseline_solution.json`：最终前沿经 min/max 归一化后，用 `max(F_normalized / max(weight, 1e-6))` 最小者得到的基线解。
+
+资格入选率在保底补足之前计算，不把补足者记成合格极值。
+有限代表集的邻域非支配检查只是一种筛选规则，不能证明局部最优或数学驻点。
+`known_separable` 只利用标准位置/距离分块，也不声称 WFG 各块在数学上完全独立。
+
+附件指定的秩和检验可显式运行，旧配对检验仍为默认值：
+
+```powershell
+python scripts/summarize.py results/smoke_iemoeo_s3 --target IEMOEO --test-method rank_sum
+python scripts/plot_results.py results/smoke_iemoeo_s3 --kind all
+```
+
+秩和结果保存为 `wilcoxon_rank_sum_holm.csv`，胜/平/负保存为 `win_tie_loss_rank_sum.csv`。
+少量 seed 的冒烟结果仅用于实现验证；正式比较和消融仍需按冻结配置完成 30 个独立 seed。

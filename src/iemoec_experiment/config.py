@@ -8,10 +8,10 @@ from typing import Any
 
 SUPPORTED_ALGORITHMS = (
     "NSGA2", "NSGA3", "MOEAD", "MOEADPBI", "RVEA", "CTAEA",
-    "AGEMOEA2", "AGEMOEA2STABLE", "IEMOEC",
+    "AGEMOEA2", "AGEMOEA2STABLE", "IEMOEC", "IEMOEO",
 )
 DEFAULT_ALGORITHMS = ("NSGA2", "NSGA3", "MOEAD", "IEMOEC")
-SUPPORTED_OBJECTIVES = (2, 3, 5, 8, 10, 15)
+SUPPORTED_OBJECTIVES = (2, 3, 4, 5, 8, 10, 15)
 ALGORITHM_LABELS = {
     "NSGA2": "NSGA-II",
     "NSGA3": "NSGA-III",
@@ -22,6 +22,7 @@ ALGORITHM_LABELS = {
     "AGEMOEA2": "AGE-MOEA2",
     "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
+    "IEMOEO": "IE-MOEO",
 }
 
 IEMOEC_SCHEMA_VERSIONS = {
@@ -453,6 +454,65 @@ class IEMOECConfig:
 
 
 @dataclass(frozen=True)
+class IEMOEOConfig:
+    """独立进化、邻域亲本检查和变量块组合；不继承 S2/S3 的机制。"""
+
+    origin_ratio: float = 0.2
+    island_population: int = 20
+    inner_generations_early: int = 1
+    inner_generations_late: int = 1
+    switch_ratio: float = 0.4
+    normalization_mode: str = "global"
+    objective_weights: tuple[float, ...] | None = None
+    principle_probe_radius: float = 0.01
+    parent_pool_limit: int = 10
+    combination_pairs_limit: int = 25
+    block_size: int = 4  # 块的数量，而不是每块的坐标数量。
+    block_mode: str = "uniform"
+    combination_method: str = "structured"
+    outer_survival: str = "nsga3"
+    use_crowding: bool = False
+    isolation: bool = True
+    parent_check: bool = True
+    block_combination: bool = True
+    diversity_maintenance: bool = True
+    elitist_pool: bool = True
+
+    def validate(self, n_obj: int) -> None:
+        if not 0 < self.origin_ratio <= 1:
+            raise ValueError("IE-MOEO origin_ratio 必须在 (0, 1] 内")
+        sizes = {
+            "island_population": (self.island_population, 2),
+            "inner_generations_early": (self.inner_generations_early, 1),
+            "inner_generations_late": (self.inner_generations_late, 1),
+            "parent_pool_limit": (self.parent_pool_limit, 2),
+            "combination_pairs_limit": (self.combination_pairs_limit, 1),
+            "block_size": (self.block_size, 2),
+        }
+        for name, (value, minimum) in sizes.items():
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"IE-MOEO {name} 必须是 >= {minimum} 的整数")
+        if not 0 <= self.switch_ratio <= 1:
+            raise ValueError("IE-MOEO switch_ratio 必须在 [0, 1] 内")
+        if not math.isfinite(self.principle_probe_radius) or self.principle_probe_radius < 0:
+            raise ValueError("IE-MOEO 邻域半径必须是非负有限数，0 表示全部入选")
+        if self.normalization_mode not in ("global", "legacy"):
+            raise ValueError("IE-MOEO normalization_mode 仅支持 global 或 legacy")
+        if self.block_mode not in ("uniform", "known_separable"):
+            raise ValueError("IE-MOEO block_mode 仅支持 uniform 或 known_separable")
+        if self.combination_method not in ("structured", "random_coord", "sbx_only"):
+            raise ValueError("IE-MOEO combination_method 不受支持")
+        if self.use_crowding or self.outer_survival not in ("nsga3", "rank"):
+            raise ValueError("IE-MOEO 只支持 nsga3/rank 环境选择，禁止拥挤距离")
+        if self.objective_weights is not None:
+            weights = self.objective_weights
+            if (len(weights) != n_obj
+                    or any(not math.isfinite(w) or w < 0 for w in weights)
+                    or not math.isclose(sum(weights), 1.0, abs_tol=1e-12)):
+                raise ValueError("objective_weights 必须与目标数相同、非负有限且和为 1")
+
+
+@dataclass(frozen=True)
 class ExperimentCase:
     algorithm: str
     problem: str
@@ -468,6 +528,7 @@ class ExperimentCase:
     high_dim_hv_samples: int = 20000
     timing_only: bool = False
     iemoec: IEMOECConfig = field(default_factory=IEMOECConfig)
+    iemoeo: IEMOEOConfig = field(default_factory=IEMOEOConfig)
 
     def validate(self) -> None:
         if self.algorithm.upper() not in SUPPORTED_ALGORITHMS:
@@ -478,10 +539,15 @@ class ExperimentCase:
             raise ValueError("seed 必须非负，max_fes 必须为正整数")
         if self.history_points < 1 or self.reference_points < 10 or self.high_dim_hv_samples < 1000:
             raise ValueError("history_points >= 1、reference_points >= 10 且 high_dim_hv_samples >= 1000")
-        self.iemoec.validate()
+        if self.normalized_algorithm == "IEMOEO":
+            self.iemoeo.validate(self.n_obj)
+        else:
+            self.iemoec.validate()
         from .problems import is_constrained_problem_name
 
         constrained = is_constrained_problem_name(self.normalized_problem)
+        if constrained and self.normalized_algorithm == "IEMOEO":
+            raise ValueError("IE-MOEO 当前仅支持无约束连续测试函数")
         if constrained and self.normalized_algorithm in ("MOEAD", "MOEADPBI"):
             raise ValueError(
                 "pymoo 的 MOEA/D 不支持约束问题；请使用明确命名的约束版本"
@@ -515,6 +581,8 @@ class ExperimentCase:
 
     @property
     def algorithm_schema_version(self) -> int:
+        if self.normalized_algorithm == "IEMOEO":
+            return 1
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.algorithm_schema_version
         if self.normalized_algorithm == "AGEMOEA2STABLE":
@@ -523,6 +591,8 @@ class ExperimentCase:
 
     @property
     def algorithm_variant(self) -> str:
+        if self.normalized_algorithm == "IEMOEO":
+            return "iemoeo"
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.variant
         if self.normalized_algorithm == "AGEMOEA2STABLE":
@@ -553,6 +623,22 @@ class ExperimentCase:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        if self.normalized_algorithm == "IEMOEO":
+            data.pop("iemoec")
+            weights = self.iemoeo.objective_weights
+            data["iemoeo"]["objective_weights"] = (
+                list(weights) if weights is not None else None
+            )
+            data.update(
+                algorithm=self.normalized_algorithm,
+                problem=self.normalized_problem,
+                algorithm_variant=self.algorithm_variant,
+                algorithm_schema_version=self.algorithm_schema_version,
+                algorithm_label=self.algorithm_label,
+            )
+            return data
+        # 不改变旧任务的序列化配置，保证历史结果仍可断点续跑。
+        data.pop("iemoeo")
         principle_fields = [name for name in data["iemoec"] if name.startswith("principle_")]
         if self.iemoec.variant not in ("principle", "s4"):
             for name in principle_fields:
@@ -572,7 +658,7 @@ class ExperimentCase:
 
 
 def default_ref_partitions(n_obj: int) -> int:
-    mapping = {2: 99, 3: 12, 5: 6, 8: 3, 10: 3, 15: 2}
+    mapping = {2: 99, 3: 12, 4: 6, 5: 6, 8: 3, 10: 3, 15: 2}
     try:
         return mapping[n_obj]
     except KeyError as exc:

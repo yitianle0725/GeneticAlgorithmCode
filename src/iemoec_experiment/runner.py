@@ -16,6 +16,7 @@ from .config import ExperimentCase
 from .constraints import feasible_mask
 from .factory import make_baseline, reference_directions
 from .iemoec import IEMOECRunner
+from .iemoeo import IEMOEORunner
 from .principle import PrincipleRunner
 from .initialization import initialization_hash, shared_initial_decisions
 from .metrics import MetricSuite, metric_schema_version_for_problem
@@ -204,7 +205,7 @@ def _is_complete(case: ExperimentCase) -> bool:
         return False
 
 
-def run_case(case: ExperimentCase, force: bool = False) -> dict:
+def run_case(case: ExperimentCase, force: bool = False, verbose_fe: bool = False) -> dict:
     case.validate()
     metric_schema_version = metric_schema_version_for_problem(
         case.normalized_problem
@@ -252,6 +253,8 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     _json_dump(config_path, case.to_dict())
     pop_size = len(reference_directions(case))
     initial_size = pop_size
+    if case.normalized_algorithm == "IEMOEO":
+        initial_size = max(2, math.ceil(pop_size * case.iemoeo.origin_ratio))
     if case.normalized_algorithm == "IEMOEC" and case.iemoec.variant in ("principle", "s4"):
         initial_size = max(2, math.ceil(pop_size * case.iemoec.origin_ratio))
     initial_X = shared_initial_decisions(problem, initial_size, case.seed)
@@ -272,8 +275,11 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
     algorithm_started = time.perf_counter()
 
     extra = {}
-    if case.normalized_algorithm == "IEMOEC":
-        runner_class = PrincipleRunner if case.iemoec.variant in ("principle", "s4") else IEMOECRunner
+    if case.normalized_algorithm in ("IEMOEC", "IEMOEO"):
+        if case.normalized_algorithm == "IEMOEO":
+            runner_class = IEMOEORunner
+        else:
+            runner_class = PrincipleRunner if case.iemoec.variant in ("principle", "s4") else IEMOECRunner
         algorithm = runner_class(
             problem,
             case,
@@ -300,7 +306,11 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         extra["outer_iterations"] = outer_iterations
         extra["global_selection_count"] = algorithm.global_selection_count
         extra["origin_population_size"] = algorithm.n_origin
-        extra["island_initialization"] = case.iemoec.island_initialization
+        extra["island_initialization"] = (
+            "founder_mutation_rebuild"
+            if case.normalized_algorithm == "IEMOEO"
+            else case.iemoec.island_initialization
+        )
         extra["island_fes_total"] = int(
             sum(row["island_fes"] for row in algorithm.outer_records)
         )
@@ -319,7 +329,34 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         extra["shared_offspring_total"] = int(
             sum(row.get("shared_offspring", 0) for row in algorithm.outer_records)
         )
-        if case.iemoec.variant in ("principle", "s4"):
+        if case.normalized_algorithm == "IEMOEO":
+            extra["initial_evaluations"] = algorithm.initial_evaluations
+            extra["combination_method"] = algorithm.combination_method
+            extra["objective_weights"] = algorithm.weights.tolist()
+            founder_count = sum(row["founder_count"] for row in algorithm.outer_records)
+            extra["parent_acceptance_rate"] = (
+                sum(row["qualified_parent_count"] for row in algorithm.outer_records) / founder_count
+                if founder_count else None
+            )
+            extra["evaluation_breakdown"] = {
+                "initial_founders": algorithm.initial_evaluations,
+                "initial_expansion": algorithm.outer_records[0]["expansion_fes"] if algorithm.outer_records else 0,
+                "later_expansions": sum(row["expansion_fes"] for row in algorithm.outer_records[1:]),
+                "local_evolution": extra["island_evolution_fes_total"],
+                "combination": extra["recombination_offspring_total"],
+                "merge_and_selection": 0,
+            }
+            if verbose_fe:
+                prefix = f"IE-MOEO {case.normalized_problem.upper()} M{case.n_obj} seed={case.seed}"
+                print(f"[{prefix}] initial_founders={algorithm.initial_evaluations}", flush=True)
+                for row in algorithm.outer_records:
+                    print(
+                        f"[{prefix}] round={row['outer_iteration']} FE={row['fe_end']}/{case.max_fes} "
+                        f"expansion={row['expansion_fes']} local={row['island_evolution_fes']} "
+                        f"combination={row['recombination_offspring']} merge=0 "
+                        f"parent_rate={row['parent_acceptance_rate']:.4f}", flush=True,
+                    )
+        elif case.iemoec.variant in ("principle", "s4"):
             extra["initial_evaluations"] = algorithm.initial_evaluations
             extra["termination_status"] = algorithm.termination_status
             extra["extremum_certificate"] = "finite_neighborhood_test_not_mathematical_proof"
@@ -389,6 +426,15 @@ def run_case(case: ExperimentCase, force: bool = False) -> dict:
         _write_history(output_dir / "iemoec_diagnostics.csv", algorithm.outer_records)
         if case.iemoec.variant in ("principle", "s4"):
             _write_history(output_dir / "lineage_audit.csv", algorithm.lineage_records)
+    if case.normalized_algorithm == "IEMOEO":
+        _write_history(output_dir / "iemoeo_diagnostics.csv", algorithm.outer_records)
+        _json_dump(output_dir / "baseline_solution.json", {
+            "x_base": algorithm.x_base.tolist(),
+            "f_base": algorithm.f_base.tolist(),
+            "objective_weights": algorithm.weights.tolist(),
+            "asf": algorithm.base_asf,
+            "normalization": "final_front_min_max",
+        })
     _write_population(output_dir / "final_population.csv", population)
     io_runtime = time.perf_counter() - io_started
     metrics["io_runtime_seconds"] = float(io_runtime)

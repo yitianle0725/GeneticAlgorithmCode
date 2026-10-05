@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import friedmanchisquare, rankdata, wilcoxon
+from scipy.stats import friedmanchisquare, rankdata, ranksums, wilcoxon
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -38,6 +38,7 @@ ALGORITHM_LABELS = {
     "AGEMOEA2": "AGE-MOEA2",
     "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
+    "IEMOEO": "IE-MOEO",
 }
 
 
@@ -344,7 +345,11 @@ def audit_constraint_rows(rows: list[dict]) -> dict:
     }
 
 
-def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
+def paired_tests(
+    rows: list[dict], target: str, alpha: float, test_method: str = "signed_rank",
+) -> list[dict]:
+    if test_method not in ("signed_rank", "rank_sum"):
+        raise ValueError("test_method 仅支持 signed_rank 或 rank_sum")
     lookup = {(r["problem"], r["n_obj"], r["algorithm"], r["seed"]): r for r in rows}
     instances = sorted({(r["problem"], r["n_obj"]) for r in rows})
     algorithms = sorted({r["algorithm"] for r in rows if r["algorithm"] != target})
@@ -366,7 +371,9 @@ def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
                     continue
                 x = np.asarray([lookup[(problem, n_obj, target, s)][metric] for s in seeds])
                 y = np.asarray([lookup[(problem, n_obj, algorithm, s)][metric] for s in seeds])
-                if np.allclose(x, y):
+                if test_method == "rank_sum":
+                    p_value = float(ranksums(x, y, alternative="two-sided").pvalue)
+                elif np.allclose(x, y):
                     p_value = 1.0
                 else:
                     p_value = float(wilcoxon(x, y, alternative="two-sided").pvalue)
@@ -397,6 +404,18 @@ def paired_tests(rows: list[dict], target: str, alpha: float) -> list[dict]:
             symbol = "+" if target_better else "-"
         test["target_result"] = symbol
     return tests
+
+
+def win_tie_loss(tests: list[dict]) -> list[dict]:
+    """按指标和对手汇总通过 Holm 校正后的场景胜/平/负。"""
+    groups = {}
+    for test in tests:
+        key = (test["metric"], test["target"], test["competitor"])
+        if key not in groups:
+            groups[key] = dict(metric=key[0], target=key[1], competitor=key[2], wins=0, ties=0, losses=0)
+        field = {"+": "wins", "=": "ties", "-": "losses"}[test["target_result"]]
+        groups[key][field] += 1
+    return list(groups.values())
 
 
 def friedman_report(rows: list[dict]) -> dict:
@@ -466,6 +485,8 @@ def main() -> int:
     parser.add_argument("results", type=Path, help="例如 results/pilot")
     parser.add_argument("--target", default="IEMOEC")
     parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--test-method", choices=["signed_rank", "rank_sum"], default="signed_rank",
+                        help="signed_rank 保留旧配对检验；rank_sum 使用附件指定的 Wilcoxon 秩和检验")
     parser.add_argument(
         "--allow-incomplete",
         action="store_true",
@@ -488,11 +509,15 @@ def main() -> int:
         args.results / "feasibility_comparison.csv",
         feasibility_comparison(rows, args.target),
     )
-    write_csv(args.results / "wilcoxon_holm.csv", paired_tests(rows, args.target, args.alpha))
+    tests = paired_tests(rows, args.target, args.alpha, args.test_method)
+    test_filename = "wilcoxon_holm.csv" if args.test_method == "signed_rank" else "wilcoxon_rank_sum_holm.csv"
+    write_csv(args.results / test_filename, tests)
+    write_csv(args.results / f"win_tie_loss_{args.test_method}.csv", win_tie_loss(tests))
     with (args.results / "friedman.json").open("w", encoding="utf-8") as handle:
         json.dump(friedman_report(rows), handle, ensure_ascii=False, indent=2)
     with (args.results / "summary_validation.json").open("w", encoding="utf-8") as handle:
         validation["constraint_audit"] = constraint_audit
+        validation["test_method"] = args.test_method
         json.dump(validation, handle, ensure_ascii=False, indent=2)
     print(f"已汇总 {len(rows)} 次独立运行: {args.results}")
     return 0

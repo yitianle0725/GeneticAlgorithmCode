@@ -32,8 +32,8 @@ def make_operators(initial_X=None):
 def make_baseline(case: ExperimentCase, initial_X=None):
     """构造共享种群规模、参考方向和变异参数的 pymoo baseline。"""
     algorithm = case.normalized_algorithm
-    if algorithm == "IEMOEC":
-        raise ValueError("IEMOEC 由自定义 runner 创建")
+    if algorithm in ("IEMOEC", "IEMOEO"):
+        raise ValueError(f"{algorithm} 由自定义 runner 创建")
     if (
         algorithm in ("MOEAD", "MOEADPBI")
         and is_constrained_problem_name(case.normalized_problem)

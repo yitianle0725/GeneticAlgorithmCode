@@ -19,6 +19,7 @@ from iemoec_experiment.config import (  # noqa: E402
     DEFAULT_ALGORITHMS,
     ExperimentCase,
     IEMOECConfig,
+    IEMOEOConfig,
     SUPPORTED_ALGORITHMS,
 )
 from iemoec_experiment.factory import reference_directions  # noqa: E402
@@ -194,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--algorithms",
         nargs="+",
+        type=str.upper,
         choices=SUPPORTED_ALGORITHMS,
         default=None,
     )
@@ -291,6 +293,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--principle-stagnation-generations", type=int, default=3)
     parser.add_argument("--principle-probe-radius", type=float, default=0.01)
     parser.add_argument("--principle-tolerance", type=float, default=1e-3)
+    parser.add_argument("--parent-pool-limit", type=int, default=10)
+    parser.add_argument("--combination-pairs-limit", type=int, default=25)
+    parser.add_argument("--block-size", type=int, default=4, help="IE-MOEO 的变量块数")
+    parser.add_argument("--block-mode", choices=["uniform", "known_separable"], default="uniform")
+    parser.add_argument("--combination-method", choices=["structured", "random_coord", "sbx_only"], default="structured")
+    parser.add_argument("--normalization-mode", choices=["global", "legacy"], default="global")
+    parser.add_argument("--objective-weights", type=float, nargs="+", help="IE-MOEO 目标权重，和为 1；默认等权")
+    parser.add_argument("--iemoeo-survival", choices=["nsga3", "rank"], default="nsga3")
+    parser.add_argument("--no-isolation", action="store_true")
+    parser.add_argument("--no-parent-check", action="store_true")
+    parser.add_argument("--no-block-combination", action="store_true")
+    parser.add_argument("--no-diversity-maintenance", action="store_true")
+    parser.add_argument("--no-elitist-pool", action="store_true")
+    parser.add_argument("--verbose-fe", action="store_true", help="输出 IE-MOEO 每轮的评价次数分账")
     return parser
 
 
@@ -410,6 +426,26 @@ def resolve_cases(args) -> list[ExperimentCase]:
         else:
             overrides["local_fe_ratio"] = 1.0
     iemoec = IEMOECConfig.for_variant(iemoec_variant, **overrides)
+    iemoeo = IEMOEOConfig(
+        origin_ratio=args.origin_ratio,
+        island_population=args.island_population,
+        inner_generations_early=args.inner_generations_early,
+        inner_generations_late=args.inner_generations_late,
+        normalization_mode=args.normalization_mode,
+        objective_weights=tuple(args.objective_weights) if args.objective_weights is not None else None,
+        principle_probe_radius=args.principle_probe_radius,
+        parent_pool_limit=args.parent_pool_limit,
+        combination_pairs_limit=args.combination_pairs_limit,
+        block_size=args.block_size,
+        block_mode=args.block_mode,
+        combination_method=args.combination_method,
+        outer_survival=args.iemoeo_survival,
+        isolation=not args.no_isolation,
+        parent_check=not args.no_parent_check,
+        block_combination=not args.no_block_combination,
+        diversity_maintenance=not args.no_diversity_maintenance,
+        elitist_pool=not args.no_elitist_pool,
+    )
     cases = []
     for problem, n_obj in scenarios:
         make_problem(problem, n_obj)
@@ -436,6 +472,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
                     high_dim_hv_samples=args.high_dim_hv_samples,
                     timing_only=args.timing_only,
                     iemoec=iemoec,
+                    iemoeo=iemoeo,
                 )
                 case.validate()
                 cases.append(case)
@@ -498,7 +535,7 @@ def main() -> int:
     failures = []
     completed = skipped = 0
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = {executor.submit(run_case, case, args.force): case for case in cases}
+        futures = {executor.submit(run_case, case, args.force, args.verbose_fe): case for case in cases}
         for future in as_completed(futures):
             case = futures[future]
             label = f"{case.normalized_problem.upper()} M{case.n_obj} {case.normalized_algorithm} seed={case.seed}"
@@ -510,6 +547,8 @@ def main() -> int:
                 else:
                     completed += 1
                     print(f"[完成] {label} FE={result['n_eval']} {result['runtime_seconds']:.2f}s")
+                    if "evaluation_breakdown" in result:
+                        print(f"  FE 分账: {result['evaluation_breakdown']}")
             except Exception as exc:  # 单任务失败不能中断整个正式批次
                 failures.append({"case": case.to_dict(), "error": repr(exc)})
                 print(f"[失败] {label}: {exc}", file=sys.stderr)

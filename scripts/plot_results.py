@@ -32,6 +32,7 @@ ALGORITHM_LABELS = {
     "AGEMOEA2": "AGE-MOEA2",
     "AGEMOEA2STABLE": "AGE-MOEA2-Stable",
     "IEMOEC": "IEMOEC",
+    "IEMOEO": "IE-MOEO",
 }
 
 
