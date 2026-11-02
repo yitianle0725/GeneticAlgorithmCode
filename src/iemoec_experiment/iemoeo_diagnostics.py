@@ -6,6 +6,28 @@ import numpy as np
 from .normalization import ObjectiveNormalization
 
 
+def combination_audit(parents, pairs, before: np.ndarray, after: np.ndarray,
+                      blocks: list[np.ndarray]) -> dict:
+    """计数完整块与亲本克隆，不评价新解，也不改变搜索随机流。"""
+    left = parents.get("X")[pairs[:, 0]]
+    right = parents.get("X")[pairs[:, 1]]
+    result = {
+        "combination_parent_pairs": len(pairs),
+        "combination_distinct_parent_pairs": int(np.sum(np.any(left != right, axis=1))),
+        "combination_block_observations": len(pairs) * len(blocks),
+    }
+    for label, children in (("before", before), ("after", after)):
+        result[f"combination_parent_copies_{label}_mutation"] = int(np.sum(
+            np.all(children == left, axis=1) | np.all(children == right, axis=1)
+        ))
+        result[f"combination_intact_blocks_{label}_mutation"] = sum(
+            int(np.sum(np.all(children[:, block] == left[:, block], axis=1)
+                       | np.all(children[:, block] == right[:, block], axis=1)))
+            for block in blocks
+        )
+    return result
+
+
 def selection_pair_audit(problem, candidates, selected, seed: int) -> dict:
     """固定阈值描述候选保留，不把某对未保留自动认定为选择错误。"""
     count = len(candidates)

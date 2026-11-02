@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from iemoec_experiment.config import ExperimentCase, IEMOECConfig, IEMOEOConfig
 from iemoec_experiment.factory import reference_directions
 from iemoec_experiment.iemoeo import IEMOEORunner, variable_blocks
-from iemoec_experiment.iemoeo_diagnostics import selection_pair_audit
+from iemoec_experiment.iemoeo_diagnostics import combination_audit, selection_pair_audit
 from iemoec_experiment.initialization import initialization_hash, shared_initial_decisions
 from iemoec_experiment.normalization import ObjectiveNormalization
 from iemoec_experiment.problems import make_problem
@@ -57,7 +57,7 @@ class IEMOEOTests(unittest.TestCase):
         case.validate()
         self.assertEqual(len(reference_directions(case)), 84)
         self.assertEqual(case.algorithm_label, "IE-MOEO")
-        self.assertEqual(case.algorithm_schema_version, 2)
+        self.assertEqual(case.algorithm_schema_version, 3)
         self.assertNotIn("iemoec", case.to_dict())
         old = ExperimentCase("IEMOEC", "dtlz2", 3, 1, 182, iemoec=IEMOECConfig.for_variant("s3_elite"))
         self.assertNotIn("iemoeo", old.to_dict())
@@ -72,6 +72,8 @@ class IEMOEOTests(unittest.TestCase):
             {"principle_probe_radius": -0.1}, {"principle_probe_radius": float("nan")},
             {"outer_survival": "unknown"}, {"use_crowding": True},
             {"representative_selection": "unknown"},
+            {"parent_check_mode": "unknown"},
+            {"block_mode": "shuffled_known", "block_size": 4},
             {"combination_method": "none", "block_combination": False},
             {"objective_weights": (0.5, 0.5)}, {"objective_weights": (1.0, 1.0, 1.0)},
         ]
@@ -175,6 +177,72 @@ class IEMOEOTests(unittest.TestCase):
                 self.assertEqual(runner.initial_evaluations + sum(row["island_fes"] for row in runner.outer_records), budget)
                 if budget >= 160:
                     self.assertGreater(sum(row["combination_reallocated_fes"] for row in runner.outer_records), 0)
+
+    def test_local_scalar_check_can_change_nondominated_parent_pool(self):
+        runner = self.make_runner(parent_check_mode="local_scalar", principle_probe_radius=.2)
+        representatives = Population.new(
+            "X", np.array([[.1] * 4, [.2] * 4, [.9] * 4]) * runner.problem.xu,
+            "F", np.array([[0., 2., 2.], [2., 0., 0.], [0., 1., 3.]]),
+        )
+        runner.normalization = ObjectiveNormalization.from_objectives(representatives.get("F"))
+        # 前两个互不支配；第二个的统一标量值更小，且在 RMS 半径内。
+        qualified = runner._qualify(representatives, representatives)
+        np.testing.assert_array_equal(qualified, [False, True, True])
+        eligible, count, fallback = runner._eligible_parents(representatives, representatives)
+        self.assertEqual(count, 2)
+        self.assertFalse(fallback)
+        audit = runner._parent_pool_audit(representatives, runner._parent_pool(eligible))
+        self.assertTrue(audit["parent_pool_changed_by_check"])
+        self.assertEqual(runner.n_eval, 0)
+
+    def test_local_scalar_uses_nonrepresentative_witness_and_normalized_rms(self):
+        results = []
+        for scale in (1, 100):
+            runner = self.make_runner(problem=BoxProblem(scale), parent_check_mode="local_scalar",
+                                      principle_probe_radius=.11)
+            pool = Population.new("X", np.array([[.1] * 4, [.2] * 4, [.8] * 4]) * runner.problem.xu,
+                                  "F", np.array([[3.] * 3, [1.] * 3, [0.] * 3]))
+            runner.normalization = ObjectiveNormalization.from_objectives(pool.get("F"))
+            results.append(runner._qualify(pool[[0, 2]], pool))
+            np.testing.assert_array_equal(results[-1], [False, True])
+            runner.config = replace(runner.config, parent_check=False)
+            self.assertTrue(np.all(runner._qualify(pool[[0, 2]])))
+            self.assertEqual(runner.n_eval, 0)
+        np.testing.assert_array_equal(*results)
+
+    def test_local_scalar_modes_keep_tail_budget_and_audit_rng(self):
+        for budget in (2, 3, 7, 59, 160):
+            for method in ("structured", "none"):
+                options = dict(budget=budget, parent_check_mode="local_scalar",
+                               principle_probe_radius=.2, combination_method=method)
+                plain, audited = self.make_runner(**options), self.make_runner(**options, selection_audit=True)
+                first, _ = plain.run()
+                second, _ = audited.run()
+                np.testing.assert_array_equal(first.get("X"), second.get("X"))
+                self.assertEqual(audited.n_eval, budget)
+                self.assertEqual(audited.initial_evaluations + sum(
+                    r["island_fes"] + r["recombination_offspring"] for r in audited.outer_records), budget)
+
+    def test_shuffled_known_preserves_sizes_and_has_independent_seed(self):
+        problem = make_problem("dtlz2", 4)
+        known = variable_blocks(problem, "dtlz2", "known_separable", 2)
+        shuffled = variable_blocks(problem, "dtlz2", "shuffled_known", 2, seed=7)
+        self.assertEqual(list(map(len, known)), list(map(len, shuffled)))
+        np.testing.assert_array_equal(np.sort(np.concatenate(shuffled)), np.arange(problem.n_var))
+        self.assertFalse(np.array_equal(known[0], shuffled[0]))
+        for first, second in zip(shuffled, variable_blocks(problem, "dtlz2", "shuffled_known", 2, seed=7)):
+            np.testing.assert_array_equal(first, second)
+
+    def test_combination_audit_detects_mutation_damage_without_evaluations(self):
+        parents = Population.new("X", np.array([[0.] * 4, [1.] * 4]))
+        before = np.array([[0., 0., 1., 1.]])
+        after = np.array([[.2, 0., 1., 1.]])
+        audit = combination_audit(parents, np.array([[0, 1]]), before, after,
+                                  [np.array([0, 1]), np.array([2, 3])])
+        self.assertEqual(audit["combination_block_observations"], 2)
+        self.assertEqual(audit["combination_intact_blocks_before_mutation"], 2)
+        self.assertEqual(audit["combination_intact_blocks_after_mutation"], 1)
+        self.assertEqual(audit["combination_parent_copies_before_mutation"], 0)
 
     def test_reallocated_generation_cannot_overspend_or_fake_evaluations(self):
         runner = self.make_runner()

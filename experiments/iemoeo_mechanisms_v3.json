@@ -1,0 +1,421 @@
+{
+  "name": "iemoeo_mechanisms_v3",
+  "description": "Schema 3: confirm core hypotheses; diagnose sampled local-scalar checks and structure-aware block inheritance independently.",
+  "variants": {
+    "full": {
+      "label": "当前完整 IE-MOEO",
+      "arguments": []
+    },
+    "rank": {
+      "label": "关闭参考方向维护，末层随机截断",
+      "arguments": [
+        "--iemoeo-survival",
+        "rank"
+      ]
+    },
+    "crowding": {
+      "label": "真实 NSGA-II 拥挤距离的环境选择",
+      "arguments": [
+        "--iemoeo-survival",
+        "rank_crowding"
+      ]
+    },
+    "shared": {
+      "label": "共享交配池，保留岛内更新",
+      "arguments": [
+        "--no-isolation"
+      ]
+    },
+    "no_combination": {
+      "label": "关闭全局组合，名义组合 FE 转给局部搜索",
+      "arguments": [
+        "--combination-method",
+        "none"
+      ]
+    },
+    "shared_no_combination": {
+      "label": "共享交配并关闭全局组合，预算转给局部搜索",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "none"
+      ]
+    },
+    "local_random": {
+      "label": "每个非空岛随机选一个代表",
+      "arguments": [
+        "--representative-selection",
+        "local_random"
+      ]
+    },
+    "global_best": {
+      "label": "联合局部池按标量适应度选相同数量代表槽位",
+      "arguments": [
+        "--representative-selection",
+        "global_best"
+      ]
+    },
+    "checked_02": {
+      "label": "Sampled local-scalar check, RMS radius 0.2",
+      "arguments": [
+        "--parent-check-mode",
+        "local_scalar",
+        "--principle-probe-radius",
+        "0.2"
+      ]
+    },
+    "unchecked_02": {
+      "label": "Matched check-off control, RMS radius 0.2",
+      "arguments": [
+        "--parent-check-mode",
+        "local_scalar",
+        "--principle-probe-radius",
+        "0.2",
+        "--no-parent-check"
+      ]
+    },
+    "checked_04": {
+      "label": "Sampled local-scalar check, RMS radius 0.4",
+      "arguments": [
+        "--parent-check-mode",
+        "local_scalar",
+        "--principle-probe-radius",
+        "0.4"
+      ]
+    },
+    "unchecked_04": {
+      "label": "Matched check-off control, RMS radius 0.4",
+      "arguments": [
+        "--parent-check-mode",
+        "local_scalar",
+        "--principle-probe-radius",
+        "0.4",
+        "--no-parent-check"
+      ]
+    },
+    "uniform_2": {
+      "label": "均匀划分两块",
+      "arguments": [
+        "--block-size",
+        "2"
+      ]
+    },
+    "known_2": {
+      "label": "位置/距离两块，不宣称完全可分",
+      "arguments": [
+        "--block-size",
+        "2",
+        "--block-mode",
+        "known_separable"
+      ]
+    },
+    "shuffled_known_2": {
+      "label": "Shuffled coordinates, same block sizes as known position/distance grouping",
+      "arguments": [
+        "--block-size",
+        "2",
+        "--block-mode",
+        "shuffled_known"
+      ]
+    },
+    "known_sbx": {
+      "label": "Known-grouping control with sbx_only",
+      "arguments": [
+        "--block-size",
+        "2",
+        "--block-mode",
+        "known_separable",
+        "--combination-method",
+        "sbx_only"
+      ]
+    },
+    "known_coord": {
+      "label": "Known-grouping control with random_coord",
+      "arguments": [
+        "--block-size",
+        "2",
+        "--block-mode",
+        "known_separable",
+        "--combination-method",
+        "random_coord"
+      ]
+    }
+  },
+  "suites": {
+    "core": [
+      "full",
+      "rank",
+      "crowding",
+      "shared",
+      "no_combination",
+      "shared_no_combination",
+      "local_random",
+      "global_best"
+    ],
+    "parents": [
+      "full",
+      "checked_02",
+      "unchecked_02",
+      "checked_04",
+      "unchecked_04"
+    ],
+    "blocks": [
+      "full",
+      "uniform_2",
+      "known_2",
+      "shuffled_known_2",
+      "known_sbx",
+      "known_coord",
+      "no_combination"
+    ],
+    "attribution": [
+      "full",
+      "rank",
+      "crowding",
+      "shared",
+      "no_combination",
+      "shared_no_combination",
+      "local_random",
+      "global_best",
+      "checked_02",
+      "unchecked_02",
+      "checked_04",
+      "unchecked_04",
+      "uniform_2",
+      "known_2",
+      "shuffled_known_2",
+      "known_sbx",
+      "known_coord"
+    ]
+  },
+  "contrasts": [
+    {
+      "id": "isolation_with_reference",
+      "target": "full",
+      "control": "shared",
+      "claim": "独立交配的贡献"
+    },
+    {
+      "id": "reference_maintenance",
+      "target": "full",
+      "control": "rank",
+      "claim": "是否仍依赖显式多样性维护"
+    },
+    {
+      "id": "uniform_block_count",
+      "target": "uniform_2",
+      "control": "full",
+      "claim": "块数敏感性"
+    },
+    {
+      "id": "known_blocks",
+      "target": "known_2",
+      "control": "uniform_2",
+      "claim": "相同块数下标准位置/距离分组的贡献"
+    },
+    {
+      "id": "local_best_vs_random",
+      "target": "full",
+      "control": "local_random",
+      "claim": "每岛最佳代表相对随机代表的贡献"
+    },
+    {
+      "id": "island_vs_global_representatives",
+      "target": "full",
+      "control": "global_best",
+      "claim": "按岛保留局部最佳相对联合池标量最佳的贡献"
+    },
+    {
+      "id": "crowding_vs_random_truncation",
+      "target": "crowding",
+      "control": "rank",
+      "claim": "隔离状态下真实拥挤距离相对随机末层截断"
+    },
+    {
+      "id": "reference_vs_crowding",
+      "target": "full",
+      "control": "crowding",
+      "claim": "同一核心的参考方向维护与真实拥挤距离比较"
+    },
+    {
+      "id": "combination_vs_local_budget",
+      "target": "full",
+      "control": "no_combination",
+      "claim": "全局组合相对把名义组合预算转给局部搜索的策略贡献"
+    },
+    {
+      "id": "shared_combination_vs_local_budget",
+      "target": "shared",
+      "control": "shared_no_combination",
+      "claim": "共享交配下全局组合相对局部预算转移"
+    },
+    {
+      "id": "isolation_without_global_combination",
+      "target": "no_combination",
+      "control": "shared_no_combination",
+      "claim": "无显式全局组合时的隔离贡献"
+    },
+    {
+      "id": "local_scalar_check_02",
+      "target": "checked_02",
+      "control": "unchecked_02",
+      "claim": "Contribution of sampled local-scalar qualification at fixed RMS radius"
+    },
+    {
+      "id": "local_scalar_check_04",
+      "target": "checked_04",
+      "control": "unchecked_04",
+      "claim": "Contribution of sampled local-scalar qualification at fixed RMS radius"
+    },
+    {
+      "id": "known_vs_shuffled",
+      "target": "known_2",
+      "control": "shuffled_known_2",
+      "claim": "Position/distance grouping versus matched shuffled block sizes"
+    },
+    {
+      "id": "known_vs_sbx",
+      "target": "known_2",
+      "control": "known_sbx",
+      "claim": "Whole-block inheritance versus SBX under matched configuration"
+    },
+    {
+      "id": "known_vs_coordinates",
+      "target": "known_2",
+      "control": "known_coord",
+      "claim": "Whole-block inheritance versus per-coordinate inheritance"
+    }
+  ],
+  "interactions": [
+    {
+      "id": "isolation_x_combination_presence",
+      "cells": [
+        "full",
+        "shared",
+        "no_combination",
+        "shared_no_combination"
+      ]
+    }
+  ],
+  "stages": {
+    "smoke": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3",
+      "seeds": "1",
+      "evals_per_pop": 20,
+      "timing_only": false
+    },
+    "pilot": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg3",
+        "wfg6",
+        "wfg9"
+      ],
+      "objectives": "3,4,10",
+      "seeds": "6-15",
+      "evals_per_pop": 200,
+      "timing_only": false
+    },
+    "confirm": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg3",
+        "wfg6",
+        "wfg9"
+      ],
+      "objectives": "3,4,10",
+      "seeds": "31-60",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "many_objective": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg3",
+        "wfg6",
+        "wfg9"
+      ],
+      "objectives": "5,8,15",
+      "seeds": "31-60",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "timing": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3,10",
+      "seeds": "31-35",
+      "evals_per_pop": 200,
+      "timing_only": true
+    }
+  },
+  "pending_controls": [
+    {
+      "id": "island_parallelism",
+      "required_for": "岛内并行效率更高",
+      "reason": "--workers 仅并行独立实验任务，不是岛内并行；需固定硬件和 FE 的 1/2/4/8 核加速及通信开销实验"
+    },
+    {
+      "id": "network_drl",
+      "required_for": "网络调度与 DRL 协同的应用优势",
+      "reason": "标准连续函数不能替代有约束网络场景、动态扰动和 DRL 联合消融"
+    },
+    {
+      "id": "extremum_certificate",
+      "required_for": "数学局部极值或驻点主张",
+      "reason": "局部标量最佳与有限代表间支配筛选不是数学认证"
+    }
+  ],
+  "common_arguments": [
+    "--iemoeo-selection-audit"
+  ],
+  "implemented_controls": [
+    {
+      "id": "local_representative_selection",
+      "required_for": "局部竞争所得亲本优于随机或全局高适应度亲本",
+      "reason": "目前 --no-parent-check 只移除邻域资格检查，未移除局部最佳代表选择；需等 FE 的岛内随机代表和全局标量最佳代表控制",
+      "status": "implemented_not_confirmed"
+    },
+    {
+      "id": "true_crowding_control",
+      "required_for": "独立进化可替代拥挤距离",
+      "reason": "当前 rank 对照是随机截断而非拥挤距离；需隔离开关×真实 rank-and-crowding 的同一核心控制，并追踪目标近似但决策远离的个体",
+      "status": "implemented_not_confirmed"
+    },
+    {
+      "id": "no_combination_equal_budget",
+      "required_for": "跨岛组合本身优于无组合",
+      "reason": "SBX 仍是跨亲本重组；需关闭组合并明确把相同 FE 重新分配到局部进化的策略",
+      "status": "implemented_not_confirmed"
+    }
+  ],
+  "budget_policy": {
+    "none": "每轮用 min(亲本索引对数,组合上限,剩余FE) 作为名义额度，转给原交配规则的局部搜索并逐次限制新评价数；完整版本缓存命中可能使实际组合FE低于名义额度。总FE相同，不宣称各阶段实际FE精确相同。"
+  },
+  "selection_audit_policy": {
+    "objective_rms_threshold": 0.02,
+    "decision_rms_threshold": 0.2,
+    "max_pairs_per_round": 1024,
+    "interpretation": "固定独立随机流抽样的候选对保留描述；不能把未保留自动视为错杀，也不能代替性能证据。"
+  },
+  "hypothesis_policy": {
+    "core": "Use all six registered problems and M3/4/10; report both IGD+ and HV with joint Holm correction. Independent confirmation uses seeds31-60 and 400N.",
+    "parents": "Two preregistered RMS radii; compare each check-on arm only with its matched check-off control. Require an actual parent-pool change before interpreting performance effects.",
+    "blocks": "Position/distance grouping is problem-informed, not a proof of separability. Compare matched block sizes against shuffled coordinates and compare identical configs with SBX/per-coordinate inheritance.",
+    "development": "Pilot seeds6-15 are for development. Freeze the chosen algorithm/configuration before confirmation; never select a winning arm on confirmation seeds.",
+    "negative_results": "Keep all negative scenes. No requirement that the check or blocks must win; drop unhelpful mechanisms if supported by development evidence.",
+    "timing": "Disable selection diagnostics and run one worker. Task workers do not measure island-level speedup."
+  }
+}

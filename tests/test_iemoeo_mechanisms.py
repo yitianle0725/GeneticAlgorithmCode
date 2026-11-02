@@ -14,12 +14,15 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 
 from analyze_iemoeo_pilot import descriptive_comparisons
 from run_iemoeo_mechanisms import DEFAULT_PLAN, build_commands, write_schedule
-from summarize_iemoeo_mechanisms import apply_global_holm, evidence_scope, interaction_rows, paired_log_ratio
+from summarize_iemoeo_mechanisms import (
+    apply_global_holm, contrast_overview, evidence_scope, interaction_overview,
+    interaction_rows, paired_log_ratio,
+)
 
 
 class MechanismPlanTests(unittest.TestCase):
     def setUp(self):
-        self.plan = json.loads(DEFAULT_PLAN.read_text(encoding="utf-8"))
+        self.plan = json.loads((ROOT / "experiments" / "iemoeo_mechanisms_v2.json").read_text(encoding="utf-8"))
 
     def test_pilot_is_720_ie_only_tasks_and_single_factor_contrasts(self):
         commands = build_commands(self.plan, "pilot", "core", Path("study"), Path("store"), 4)
@@ -102,6 +105,42 @@ class MechanismPlanTests(unittest.TestCase):
                 self.assertTrue(set(item["cells"]) <= names)
 
 
+class MechanismV3PlanTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = json.loads(DEFAULT_PLAN.read_text(encoding="utf-8"))
+
+    def test_pilot_counts_and_every_contrast_changes_one_factor(self):
+        self.assertEqual(self.plan["name"], "iemoeo_mechanisms_v3")
+        commands = build_commands(self.plan, "pilot", "attribution", Path("study"), Path("store"), 4)
+        self.assertEqual(sum(c["tasks"] for c in commands), 3060)
+        self.assertEqual(sum(c["total_fes"] for c in commands), 80_580_000)
+        configs = {c["variant"]: c["iemoeo_config"] for c in commands}
+        for contrast in self.plan["contrasts"]:
+            first, second = configs[contrast["target"]], configs[contrast["control"]]
+            changed = [key for key in first if first[key] != second[key]]
+            self.assertEqual(len(changed), 1, (contrast["id"], changed))
+        self.assertTrue(all(c["case_template"]["algorithm_schema_version"] == 3 for c in commands))
+
+    def test_core_confirmation_is_complete_and_independent_of_development(self):
+        commands = build_commands(self.plan, "confirm", "core", Path("study"), Path("store"), 4)
+        self.assertEqual(sum(c["tasks"] for c in commands), 4320)
+        self.assertEqual(sum(c["total_fes"] for c in commands), 227_520_000)
+        self.assertEqual(self.plan["stages"]["pilot"]["seeds"], "6-15")
+        self.assertEqual(self.plan["stages"]["confirm"]["seeds"], "31-60")
+        self.assertTrue(set(self.plan["interactions"][0]["cells"]) <= set(self.plan["suites"]["core"]))
+
+    def test_check_controls_and_block_sizes_are_registered(self):
+        commands = build_commands(self.plan, "smoke", "attribution", Path("study"), Path("store"), 4)
+        configs = {c["variant"]: c["iemoeo_config"] for c in commands}
+        self.assertEqual(sum(c["tasks"] for c in commands), 34)
+        for suffix, radius in (("02", .2), ("04", .4)):
+            self.assertEqual(configs[f"checked_{suffix}"]["parent_check_mode"], "local_scalar")
+            self.assertEqual(configs[f"checked_{suffix}"]["principle_probe_radius"], radius)
+            self.assertFalse(configs[f"unchecked_{suffix}"]["parent_check"])
+        for name in ("known_2", "shuffled_known_2", "known_sbx", "known_coord"):
+            self.assertEqual(configs[name]["block_size"], 2)
+
+
 class MechanismStatisticsTests(unittest.TestCase):
     def test_smoke_and_timing_cannot_be_labelled_confirmation(self):
         self.assertEqual(evidence_scope("smoke"), "implementation_only")
@@ -143,6 +182,30 @@ class MechanismStatisticsTests(unittest.TestCase):
         rows = descriptive_comparisons(groups, "IEMOEO")
         self.assertTrue(all(row["better"] == 1 for row in rows))
         self.assertTrue(all("p_value" not in row for row in rows))
+
+    def test_overview_separates_median_direction_from_significance(self):
+        rows = [dict(contrast="test", metric="igd_plus", claim="test", target="full",
+                     competitor="control", target_median=a, competitor_median=b,
+                     target_result="=", p_holm=1., evidence_scope="development")
+                for a, b in [(1., 2.), (2., 1.), (1., 1.)]]
+        report = contrast_overview(rows)[0]
+        self.assertEqual([report[key] for key in ("median_better", "median_equal", "median_worse")], [1, 1, 1])
+        self.assertEqual(report["significant_better"], 0)
+        self.assertEqual(report["significant_worse"], 0)
+        self.assertEqual(report["median_relative_improvement_percent"], 0.)
+        for row in rows:
+            row["metric"] = "hv"
+            row["competitor_median"] = 0.
+        report = contrast_overview(rows)[0]
+        self.assertEqual(report["median_better"], 3)
+        self.assertIsNone(report["median_relative_improvement_percent"])
+        self.assertEqual(report["relative_change_scenes"], 0)
+
+    def test_interaction_overview_does_not_label_sign_as_significance(self):
+        rows = [dict(interaction="test", median_log_interaction=-.2, p_holm=1.)]
+        report = interaction_overview(rows)[0]
+        self.assertEqual(report["negative"], 1)
+        self.assertEqual(report["significant_negative"], 0)
 
 
 if __name__ == "__main__":

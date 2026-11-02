@@ -302,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parent-pool-limit", type=int, default=10)
     parser.add_argument("--combination-pairs-limit", type=int, default=25)
     parser.add_argument("--block-size", type=int, default=4, help="IE-MOEO 的变量块数")
-    parser.add_argument("--block-mode", choices=["uniform", "known_separable"], default="uniform")
+    parser.add_argument("--block-mode", choices=["uniform", "known_separable", "shuffled_known"], default="uniform")
     parser.add_argument("--combination-method", choices=["structured", "random_coord", "sbx_only", "none"], default="structured",
                         help="none 关闭全局组合，把本轮名义组合 FE 额度转给局部搜索")
     parser.add_argument("--normalization-mode", choices=["global", "legacy"], default="global")
@@ -310,6 +310,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iemoeo-survival", choices=["nsga3", "rank", "rank_crowding"], default="nsga3")
     parser.add_argument("--representative-selection", choices=["local_best", "local_random", "global_best"], default="local_best")
     parser.add_argument("--iemoeo-selection-audit", action="store_true", help="记录目标接近但决策远离的候选对保留情况，不增加 FE")
+    parser.add_argument("--parent-check-mode", choices=["representative_dominance", "local_scalar"],
+                        default="representative_dominance",
+                        help="旧代表支配检查，或已评价局部池的标量改进检查；后者使用归一化 RMS 距离")
     parser.add_argument("--no-isolation", action="store_true")
     parser.add_argument("--no-parent-check", action="store_true")
     parser.add_argument("--no-block-combination", action="store_true")
@@ -456,6 +459,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
         elitist_pool=not args.no_elitist_pool,
         representative_selection=args.representative_selection,
         selection_audit=args.iemoeo_selection_audit,
+        parent_check_mode=args.parent_check_mode,
     )
     cases = []
     for problem, n_obj in scenarios:

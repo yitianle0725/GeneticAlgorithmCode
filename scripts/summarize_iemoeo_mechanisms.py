@@ -108,7 +108,62 @@ def diagnostic_summary(name: str, rows: list[dict], rounds: list[dict]) -> dict:
         "representative_island_slots": total("representative_source_islands"),
         "schema2_diagnostics_available": all("representative_selection" in r for r in rounds),
         "rounds_check_changed_parent_pool": sum(r.get("parent_pool_changed_by_check") == "True" for r in rounds),
+        "combination_parent_pairs": total("combination_parent_pairs"),
+        "combination_distinct_parent_pairs": total("combination_distinct_parent_pairs"),
+        "combination_parent_copies_before_mutation": total("combination_parent_copies_before_mutation"),
+        "combination_parent_copies_after_mutation": total("combination_parent_copies_after_mutation"),
+        "combination_block_observations": total("combination_block_observations"),
+        "combination_intact_blocks_before_mutation": total("combination_intact_blocks_before_mutation"),
+        "combination_intact_blocks_after_mutation": total("combination_intact_blocks_after_mutation"),
+        "combination_unique_candidates": total("combination_unique_candidates"),
+        "combination_children_selected": total("combination_children_selected"),
+        "combination_children_nondominated": total("combination_children_nondominated"),
+        "schema3_diagnostics_available": bool(rounds) and all("parent_check_mode" in r for r in rounds),
     }
+
+
+def contrast_overview(tests: list[dict]) -> list[dict]:
+    """分开报告场景中位数方向与校正后的显著胜负，避免将数值优势当作确认。"""
+    groups = {}
+    for row in tests:
+        groups.setdefault((row["contrast"], row["metric"]), []).append(row)
+    overview = []
+    for (contrast, metric), rows in groups.items():
+        direction = -1 if metric == "igd_plus" else 1
+        differences = [direction * (r["target_median"] - r["competitor_median"]) for r in rows]
+        relative = [100 * difference / abs(row["competitor_median"])
+                    for difference, row in zip(differences, rows) if row["competitor_median"] != 0]
+        overview.append({
+            "contrast": contrast, "metric": metric, "claim": rows[0]["claim"],
+            "target": rows[0]["target"], "control": rows[0]["competitor"],
+            "scenes": len(rows),
+            "median_better": sum(value > 0 for value in differences),
+            "median_equal": sum(value == 0 for value in differences),
+            "median_worse": sum(value < 0 for value in differences),
+            "median_relative_improvement_percent": float(np.median(relative)) if relative else None,
+            "relative_change_scenes": len(relative),
+            "significant_better": sum(row["target_result"] == "+" for row in rows),
+            "significant_worse": sum(row["target_result"] == "-" for row in rows),
+            "min_p_holm": min(row["p_holm"] for row in rows),
+            "evidence_scope": rows[0]["evidence_scope"],
+        })
+    return overview
+
+
+def interaction_overview(rows: list[dict]) -> list[dict]:
+    groups = {}
+    for row in rows:
+        groups.setdefault(row["interaction"], []).append(row)
+    return [{
+        "interaction": name, "scenes": len(group),
+        "negative": sum(row["median_log_interaction"] < 0 for row in group),
+        "zero": sum(row["median_log_interaction"] == 0 for row in group),
+        "positive": sum(row["median_log_interaction"] > 0 for row in group),
+        "significant_negative": sum(row["median_log_interaction"] < 0 and row["p_holm"] < .05 for row in group),
+        "significant_positive": sum(row["median_log_interaction"] > 0 and row["p_holm"] < .05 for row in group),
+        "min_p_holm": min(row["p_holm"] for row in group),
+        "interpretation": "负值表示前两组的相对效应更有利；不自动代表两个主效应均有益",
+    } for name, group in groups.items()]
 
 
 def summarize_study(root: Path) -> dict:
@@ -188,7 +243,9 @@ def summarize_study(root: Path) -> dict:
     output = root / "mechanism_summary"
     output.mkdir(exist_ok=True)
     write_csv(output / "registered_contrasts.csv", tests)
+    write_csv(output / "contrast_overview.csv", contrast_overview(tests))
     write_csv(output / "interactions.csv", interactions)
+    write_csv(output / "interaction_overview.csv", interaction_overview(interactions))
     write_csv(output / "activation.csv", activation)
     write_csv(output / "run_metrics.csv", run_metrics)
     summary = {

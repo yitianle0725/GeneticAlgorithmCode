@@ -1,6 +1,6 @@
 """IE-MOEO：重建小群体、独立局部竞争、邻域亲本筛选和变量块组合。
 
-邻域检查只比较已评价的小群体代表，不产生探测点，也不是驻点证明。
+邻域检查使用已评价候选，不产生探测点，也不是驻点证明。
 所有目标均按最小化处理；修复组件可由后续网络调度问题替换。
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
 from .factory import make_operators, reference_directions
 from .initialization import shared_initial_decisions
-from .iemoeo_diagnostics import selection_pair_audit
+from .iemoeo_diagnostics import combination_audit, selection_pair_audit
 from .normalization import ObjectiveNormalization
 from .problems import standard_problem_dimensions
 
@@ -28,12 +28,13 @@ def clip_to_bounds(problem, X: np.ndarray) -> np.ndarray:
     return np.clip(X, problem.xl, problem.xu)
 
 
-def variable_blocks(problem, problem_name: str, mode: str, count: int) -> list[np.ndarray]:
+def variable_blocks(problem, problem_name: str, mode: str, count: int,
+                    seed: int = 0) -> list[np.ndarray]:
     """返回互不重叠且覆盖所有坐标的变量块。count 表示块数。"""
     coordinates = np.arange(problem.n_var)
     if mode == "uniform":
         return list(np.array_split(coordinates, min(count, problem.n_var)))
-    if mode != "known_separable":
+    if mode not in ("known_separable", "shuffled_known"):
         raise ValueError(f"未知变量分块方式: {mode}")
     name = problem_name.lower().replace("-", "")
     standard_n_var, k, _ = standard_problem_dimensions(name, problem.n_obj)
@@ -46,6 +47,9 @@ def variable_blocks(problem, problem_name: str, mode: str, count: int) -> list[n
         raise ValueError("known_separable 仅支持 DTLZ/WFG")
     if not 0 < boundary < problem.n_var:
         raise ValueError("位置/距离分块要求两个块都非空")
+    if mode == "shuffled_known":
+        # 独立随机流只打乱分组，保持与已知分组相同的块数及块尺寸。
+        coordinates = np.random.default_rng(20261103 + seed).permutation(coordinates)
     return [coordinates[:boundary], coordinates[boundary:]]
 
 
@@ -92,7 +96,9 @@ class IEMOEORunner:
         )
         self.blocks = variable_blocks(
             problem, case.normalized_problem, self.config.block_mode, self.config.block_size,
+            case.seed,
         )
+        self.combination_records: dict = {}
         self.on_checkpoint = on_checkpoint
         self.on_outer_selection = on_outer_selection
         self.on_evaluation = on_evaluation
@@ -258,10 +264,28 @@ class IEMOEORunner:
                 best.append(representative)
         return Population.create(*best)
 
-    def _qualify(self, representatives) -> np.ndarray:
+    def _qualify(self, representatives, local_population=None) -> np.ndarray:
         radius = self.config.principle_probe_radius
         if not self.config.parent_check or radius == 0:
             return np.ones(len(representatives), dtype=bool)
+        if self.config.parent_check_mode == "local_scalar":
+            if local_population is None or not len(local_population):
+                raise ValueError("local_scalar 检查需要本轮已评价的局部候选池")
+            # 同一归一化与权重下检验有限样本改进，可筛掉非支配但标量较差的代表。
+            # 这与原来的支配筛选是不同假设，不能称为局部极值认证。
+            context = self.normalization
+            if self.config.normalization_mode == "legacy":
+                context = ObjectiveNormalization.from_objectives(local_population.get("F"))
+            reference_scores = self._scores(local_population, context)
+            scores = self._scores(representatives, context)
+            references = (local_population.get("X") - self.problem.xl) / (self.problem.xu - self.problem.xl)
+            decisions = (representatives.get("X") - self.problem.xl) / (self.problem.xu - self.problem.xl)
+            qualified = np.ones(len(representatives), dtype=bool)
+            for i, decision in enumerate(decisions):
+                distance = np.sqrt(np.mean((references - decision) ** 2, axis=1))
+                improves = reference_scores < scores[i] - 1e-12
+                qualified[i] = not np.any((distance <= radius) & improves)
+            return qualified
         # WFG 等非单位区间先归一化。半径越大，可能发现的支配者越多，筛选越严。
         X = (representatives.get("X") - self.problem.xl) / (self.problem.xu - self.problem.xl)
         F = representatives.get("F")
@@ -272,8 +296,8 @@ class IEMOEORunner:
             qualified[i] = not np.any(nearby & dominates)
         return qualified
 
-    def _eligible_parents(self, representatives) -> tuple[Population, int, bool]:
-        qualified = self._qualify(representatives)
+    def _eligible_parents(self, representatives, local_population=None) -> tuple[Population, int, bool]:
+        qualified = self._qualify(representatives, local_population)
         count = int(np.sum(qualified))
         fallback = count < 2
         if fallback:
@@ -337,6 +361,7 @@ class IEMOEORunner:
         return islands, foreign_parents, calls
 
     def _combine(self, parents) -> Population:
+        self.combination_records = {}
         if self.combination_method == "none" or len(parents) < 2 or not self.remaining:
             return Population.empty()
         possible = list(combinations(range(len(parents)), 2))
@@ -352,7 +377,10 @@ class IEMOEORunner:
                 for a, b in pairs
             ])
         # 完全可组合/部分可组合元素统一经过变异和 repair；当前 repair 是越界裁剪。
-        return self._evaluate(self._mutate(X))
+        mutated = self._mutate(X)
+        if self.config.selection_audit:
+            self.combination_records = combination_audit(parents, pairs, X, mutated, self.blocks)
+        return self._evaluate(mutated)
 
     def _select_founders(self, candidates) -> Population:
         if len(candidates) < self.n_origin and self.remaining:
@@ -417,8 +445,10 @@ class IEMOEORunner:
                 foreign_parents += count
             local_end = self.n_eval
             representatives = self._representatives(islands)
-            eligible, qualified_count, fallback = self._eligible_parents(representatives)
+            check_population = merge_populations(islands)
+            eligible, qualified_count, fallback = self._eligible_parents(representatives, check_population)
             parents = self._parent_pool(eligible)
+            self.combination_records = {}
             combination_budget = self._combination_budget(parents)
             redirected_fes = extra_local_calls = 0
             if self.combination_method == "none":
@@ -429,7 +459,8 @@ class IEMOEORunner:
                 local_end = self.n_eval
                 if redirected_fes:
                     representatives = self._representatives(islands)
-                    eligible, qualified_count, fallback = self._eligible_parents(representatives)
+                    check_population = merge_populations(islands)
+                    eligible, qualified_count, fallback = self._eligible_parents(representatives, check_population)
                     parents = self._parent_pool(eligible)
                 offspring = Population.empty()
             else:
@@ -465,6 +496,9 @@ class IEMOEORunner:
                 "front_size": len(self.candidate_pool),
                 "budget_exhausted": self.remaining == 0,
                 "representative_selection": self.config.representative_selection,
+                "parent_check_mode": self.config.parent_check_mode,
+                "parent_check_enabled": self.config.parent_check,
+                "parent_check_reference_count": len(check_population) if self.config.parent_check_mode == "local_scalar" else len(representatives),
                 "representative_source_islands": len(set(representatives.get("source_island"))),
                 "unique_representative_count": len({self._key(ind.X) for ind in representatives}),
                 "combination_method": self.combination_method,
@@ -474,6 +508,11 @@ class IEMOEORunner:
                 "survival_method": self.config.outer_survival if self.config.diversity_maintenance else "rank",
             }
             if self.config.selection_audit:
+                record.update(self.combination_records)
+                offspring_keys = {self._key(ind.X) for ind in offspring}
+                record["combination_unique_candidates"] = len(offspring_keys)
+                record["combination_children_selected"] = sum(self._key(ind.X) in offspring_keys for ind in self.founders)
+                record["combination_children_nondominated"] = sum(self._key(ind.X) in offspring_keys for ind in self.candidate_pool)
                 record.update(self._parent_pool_audit(representatives, parents))
                 record.update(selection_pair_audit(
                     self.problem, candidates, self.founders,

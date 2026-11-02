@@ -515,7 +515,7 @@ docs/
 
 ## 13. IE-MOEO
 
-`IEMOEO`（标签 `IE-MOEO`，当前独立 algorithm schema 2）是独立算法；schema 1 历史结果保持原样。
+`IEMOEO`（标签 `IE-MOEO`，当前独立 algorithm schema 3）是独立算法；schema 1/2 历史结果保持原样。
 本研究线将既有 IEMOEC 作为**前期对照版本**，其结果不能归因到隔离、亲本选择或块组合中的单一机制。
 新增实现不修改 IEMOEC 的版本配置、算法核心和历史结果格式。
 
@@ -540,15 +540,16 @@ python scripts/run.py --preset custom `
 | `--objective-weights 0.25 0.25 0.25 0.25` | 所有小群体共用的局部竞争及 ASF 偏好权重，默认等权；数量必须等于目标数、和为 1 |
 | `--normalization-mode global` | 每轮从新建小群体的联合目标建立公共尺度，局部进化期间冻结 |
 | `--normalization-mode legacy` | 局部交配/选择时从相应候选池建立尺度；跨群体亲本排序仍用本轮公共尺度 |
-| `--principle-probe-radius 0.01` | 决策变量归一化后的欧氏邻域半径；0 时全部代表入选，增大时筛选更严 |
+| `--principle-probe-radius 0.01` | 旧代表支配检查使用归一化欧氏距离；local_scalar 使用归一化 RMS 距离；0 时全部入选，两种半径不可直接混用 |
+| `--parent-check-mode representative_dominance/local_scalar` | 默认保留旧代表支配规则；local_scalar 用本轮已评价局部池寻找更优标量值，不额外消耗 FE，仍不是极值证明 |
 | `--parent-pool-limit 10` | 资格池按非支配等级、同级按归一化加权和选取亲本的数量上限 |
 | `--combination-pairs-limit 25` | 无放回抽取不同亲本索引对的上限，每对产生一个候选后代 |
 | `--block-size 4` | uniform 的块数；大于变量数时每个坐标独立成块 |
-| `--block-mode uniform/known_separable` | 坐标等分或 DTLZ/WFG 位置与距离变量两块 |
+| `--block-mode uniform/known_separable/shuffled_known` | 坐标等分、位置/距离分组，或同块尺寸的随机坐标分组；shuffled_known 要求 block-size=2，使用独立随机流 |
 | `--combination-method structured/random_coord/sbx_only/none` | 整块继承、逐坐标继承、SBX 或无显式全局组合；none 将名义组合 FE 转给局部搜索 |
 | `--representative-selection local_best/local_random/global_best` | 每岛最佳、每岛随机或联合池标量最佳代表；后两者只用作机制对照 |
 | `--iemoeo-survival nsga3/rank/rank_crowding` | 参考方向、等级加随机截断或真实 NSGA-II 拥挤距离；默认仍是 nsga3 |
-| `--iemoeo-selection-audit` | 固定独立随机流记录目标接近但决策远离的候选对保留情况，不消耗 FE |
+| `--iemoeo-selection-audit` | 记录候选对保留、亲本池变化、组合块在变异前后的完整性与后代入选，不使用搜索随机流、不消耗 FE |
 | `--no-isolation` | 局部进化的交配池改为全部小群体的联合池 |
 | `--no-parent-check` | 所有小群体代表直接进入资格池 |
 | `--no-block-combination` | 组合阶段改用 SBX，仍执行变异与修复 |
@@ -571,7 +572,7 @@ python scripts/run.py --preset custom `
 - `baseline_solution.json`：最终前沿经 min/max 归一化后，用 `max(F_normalized / max(weight, 1e-6))` 最小者得到的基线解。
 
 资格入选率在保底补足之前计算，不把补足者记成合格极值。
-有限代表集的邻域非支配检查只是一种筛选规则，不能证明局部最优或数学驻点。
+两种有限样本邻域检查都只是一种筛选规则，不能证明局部最优或数学驻点。
 `known_separable` 只利用标准位置/距离分块，也不声称 WFG 各块在数学上完全独立。
 
 附件指定的秩和检验可显式运行，旧配对检验仍为默认值：
@@ -588,19 +589,30 @@ python scripts/plot_results.py results/smoke_iemoeo_s3 --kind all
 
 原 pilot 的审计见 [pilot 分析](reports/iemoeo_pilot_200n_v1_analysis.md)，原 16 次机制冒烟的
 结论及新对照说明见 [机制冒烟评估](reports/iemoeo_smoke_mechanism_assessment.md)。
-原 [v1 方案](reports/iemoeo_mechanism_plan.md) 和登记文件保持不变，新方案位于
-`experiments/iemoeo_mechanisms_v2.json`，当前调度器默认使用 v2。
+原 v1/v2 方案和冻结结果保持不变。v2 的 1350 项机制 pilot 已完成：显式维护、全局组合和
+每岛最佳代表有正向开发趋势；默认邻域检查没有改变实际亲本池，整块继承没有稳定优于普通组合。
+当前调度器默认使用 `experiments/iemoeo_mechanisms_v3.json`。
+新实现、证据边界及完整命令见 [v3 实验安排](reports/iemoeo_v3_experiment_plan.md)。
 
 ```powershell
 python scripts/analyze_iemoeo_pilot.py results/iemoeo_pilot_200n_v1
-python scripts/run_iemoeo_mechanisms.py --stage pilot --suite attribution --workers 4
+python scripts/run_iemoeo_mechanisms.py --stage pilot --suite core --workers 4
 ```
 
-第二条命令只登记 1350 项 IE-MOEO 内部任务；加 `--execute` 实际计算，不运行其他七种性能参照。
-新目录为 `results/iemoeo_mechanisms_v2/pilot/attribution`，完成后作为
-`scripts/summarize_iemoeo_mechanisms.py` 的参数生成对照、交互、激活和选择保留诊断。
-也可以选择 `--suite parents`（450 项）、`crowding`（540 项）、`combination`（630 项）分阶段计算；
-同配置的 full 等锚点会在套件之间自动复用。完整 attribution 则保证全部登记交互的四个单元都齐全。
+第二条命令只登记 core 的 1440 项；加 `--execute` 实际计算。
+v3 pilot 使用新开发 seeds 6–15、200N，结果在 `results/iemoeo_mechanisms_v3/pilot/<suite>`。
+parents 为 900 项，blocks 为 1260 项，完整 attribution 为 3060 项；同配置锚点跨套件复用。
+core 已包含隔离×组合的完整 2×2 和显式维护、代表选择的单因素控制。
+正式 core 确认使用独立 seeds 31–60、400N，共 4320 项；它可以针对已冻结的原核心直接进行，
+新邻域/分块候选则应先完成开发 pilot，不能在确认集上挑胜者。
+
+```powershell
+python scripts/run_iemoeo_mechanisms.py --stage pilot --suite attribution --workers 4 --execute
+python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v3/pilot/attribution
+```
+
+汇总新增 `contrast_overview.csv` 和 `interaction_overview.csv`，分别列出数值方向与显著结果；
+`=` 只表示没有检出显著差异，不表示等效。不要把分套件结果中最有利的 p 值当作完整 attribution 校正。
 
 schema 2 新增代表选择、真实拥挤距离和无全局组合控制。none 将每轮
 `min(亲本索引对数, combination_pairs_limit, 剩余FE)` 作为名义额度，转给原交配规则的局部搜索，
@@ -610,6 +622,6 @@ schema 2 新增代表选择、真实拥挤距离和无全局组合控制。none 
 联合池最佳对照先对决策去重，避免重复克隆占用代表名额；诊断另外记录资格检查是否真正改变了
 最终亲本池，避免把“出现拒绝”误当成机制已起作用。
 新增诊断不会使用搜索随机流；旧八组的默认搜索行为进行回归核对。IE-MOEO 源码和 schema 变化后
-使用新结果目录，不混入 v1；公共 baseline 的配置与实现未改动，仍可复用。
+使用新结果目录，不混入 v1/v2；公共 baseline 的配置与实现未改动，仍可复用。
 S3-Elite 不是独立进化的单因素控制，单 seed 的 A12 标签不再输出为“large”，统一标记为样本不足解释。
 数学极值认证、岛内并行、低复杂度阶数及网络/DRL 联合优势仍没有被这些对照证明。

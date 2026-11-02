@@ -479,6 +479,7 @@ class IEMOEOConfig:
     elitist_pool: bool = True
     representative_selection: str = "local_best"
     selection_audit: bool = False
+    parent_check_mode: str = "representative_dominance"
 
     def validate(self, n_obj: int) -> None:
         if not 0 < self.origin_ratio <= 1:
@@ -500,14 +501,18 @@ class IEMOEOConfig:
             raise ValueError("IE-MOEO 邻域半径必须是非负有限数，0 表示全部入选")
         if self.normalization_mode not in ("global", "legacy"):
             raise ValueError("IE-MOEO normalization_mode 仅支持 global 或 legacy")
-        if self.block_mode not in ("uniform", "known_separable"):
-            raise ValueError("IE-MOEO block_mode 仅支持 uniform 或 known_separable")
+        if self.block_mode not in ("uniform", "known_separable", "shuffled_known"):
+            raise ValueError("IE-MOEO block_mode 仅支持 uniform/known_separable/shuffled_known")
+        if self.block_mode == "shuffled_known" and self.block_size != 2:
+            raise ValueError("shuffled_known 与位置/距离两块匹配，block_size 必须为 2")
         if self.combination_method not in ("structured", "random_coord", "sbx_only", "none"):
             raise ValueError("IE-MOEO combination_method 不受支持")
         if self.use_crowding or self.outer_survival not in ("nsga3", "rank", "rank_crowding"):
             raise ValueError("IE-MOEO 环境选择应使用 nsga3/rank/rank_crowding，不能使用旧 use_crowding 开关")
         if self.representative_selection not in ("local_best", "local_random", "global_best"):
             raise ValueError("不支持的 IE-MOEO 代表选择策略")
+        if self.parent_check_mode not in ("representative_dominance", "local_scalar"):
+            raise ValueError("不支持的 IE-MOEO 邻域检查方式")
         if self.combination_method == "none" and not self.block_combination:
             raise ValueError("none 与 --no-block-combination 不能同时使用，后者会改为 SBX")
         if self.objective_weights is not None:
@@ -593,7 +598,7 @@ class ExperimentCase:
     @property
     def algorithm_schema_version(self) -> int:
         if self.normalized_algorithm == "IEMOEO":
-            return 2
+            return 3
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.algorithm_schema_version
         if self.normalized_algorithm == "AGEMOEA2STABLE":

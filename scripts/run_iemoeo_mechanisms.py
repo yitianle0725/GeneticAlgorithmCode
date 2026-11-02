@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run import build_parser, resolve_cases
 from iemoec_experiment.result_store import implementation_signature
 
-DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v2.json"
+DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v3.json"
 
 
 def build_commands(plan: dict, stage: str, suite: str, output_root: Path,
@@ -78,7 +78,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
     parser.add_argument("--stage", choices=["smoke", "pilot", "confirm", "many_objective", "timing"], default="pilot")
-    parser.add_argument("--suite", default="core", help="方案中的套件名，例如 attribution/parents/crowding/combination")
+    parser.add_argument("--suite", default="core", help="方案中的套件名，例如 core/parents/blocks/attribution")
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--result-store", type=Path, default=ROOT / "results" / "algorithms")
     parser.add_argument("--workers", type=int)
