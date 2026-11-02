@@ -287,7 +287,8 @@ class IEMOEOTests(unittest.TestCase):
         self.assertFalse(any([config.isolation, config.parent_check, config.block_combination, config.diversity_maintenance, config.elitist_pool]))
         self.assertEqual(json.loads(json.dumps(cases[0].to_dict(), ensure_ascii=False)), cases[0].to_dict())
         with tempfile.TemporaryDirectory() as temp:
-            case = replace(cases[0], output_root=temp, reference_points=30, high_dim_hv_samples=1000)
+            case = replace(cases[0], output_root=temp, result_store=str(Path(temp) / "algorithms"),
+                           reference_points=30, high_dim_hv_samples=1000)
             result = run_case(case)
             expected = shared_initial_decisions(make_problem("dtlz2", 4), 17, 1)
             self.assertEqual(result["initialization_hash"], initialization_hash(expected))

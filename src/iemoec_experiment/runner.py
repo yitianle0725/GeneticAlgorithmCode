@@ -187,6 +187,10 @@ def _write_population(path: Path, population) -> None:
 
 
 def _is_complete(case: ExperimentCase) -> bool:
+    if case.result_store is not None:
+        from .result_store import stored_result_complete
+
+        return stored_result_complete(case)
     config_path = case.output_dir / "config.json"
     metrics_path = case.output_dir / "metrics.json"
     if not config_path.exists() or not metrics_path.exists():
@@ -205,7 +209,19 @@ def _is_complete(case: ExperimentCase) -> bool:
         return False
 
 
-def run_case(case: ExperimentCase, force: bool = False, verbose_fe: bool = False) -> dict:
+def run_case(
+    case: ExperimentCase, force: bool = False, verbose_fe: bool = False,
+    legacy_candidates: tuple[str, ...] = (),
+) -> dict:
+    case.validate()
+    if case.result_store is not None:
+        from .result_store import run_stored_case
+
+        return run_stored_case(case, force, verbose_fe, legacy_candidates)
+    return _execute_case(case, force, verbose_fe)
+
+
+def _execute_case(case: ExperimentCase, force: bool = False, verbose_fe: bool = False) -> dict:
     case.validate()
     metric_schema_version = metric_schema_version_for_problem(
         case.normalized_problem
@@ -232,7 +248,12 @@ def run_case(case: ExperimentCase, force: bool = False, verbose_fe: bool = False
             raise RuntimeError(
                 f"{output_dir} 已有不同 algorithm schema；禁止覆盖，请更换 --run-name"
             )
-        if previous != case.to_dict():
+        config_matches = previous == case.to_dict()
+        if case.result_store is not None and isinstance(previous, dict):
+            from .result_store import comparable_config
+
+            config_matches = comparable_config(previous) == comparable_config(case.to_dict())
+        if not config_matches:
             raise RuntimeError(
                 f"{output_dir} 已有不同配置；禁止混写，请更换 --run-name"
             )

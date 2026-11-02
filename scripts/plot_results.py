@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from iemoec_experiment.manifest import (  # noqa: E402
     load_manifest,
+    result_files,
     task_key,
     validate_result_rows,
 )
@@ -57,12 +58,12 @@ def read_csv(path: Path) -> list[dict]:
 def validate_dataset(root: Path, allow_incomplete: bool) -> None:
     manifest = load_manifest(root)
     rows = []
-    for path in root.rglob("metrics.json"):
+    for path in result_files(root, "metrics.json", manifest):
         with path.open(encoding="utf-8") as handle:
             rows.append(json.load(handle))
     validate_result_rows(rows, manifest, allow_incomplete)
     expected = {task_key(task) for task in manifest["tasks"]}
-    for path in root.rglob("config.json"):
+    for path in result_files(root, "config.json", manifest):
         with path.open(encoding="utf-8") as handle:
             key = task_key(json.load(handle))
         if key not in expected:
@@ -71,7 +72,7 @@ def validate_dataset(root: Path, allow_incomplete: bool) -> None:
 
 def convergence(root: Path, output: Path) -> None:
     groups = defaultdict(list)
-    for path in root.rglob("history.csv"):
+    for path in result_files(root, "history.csv"):
         with (path.parent / "config.json").open(encoding="utf-8") as handle:
             cfg = json.load(handle)
         rows = read_csv(path)
@@ -115,7 +116,7 @@ def convergence(root: Path, output: Path) -> None:
 
 def boxplots(root: Path, output: Path) -> None:
     groups = defaultdict(lambda: defaultdict(list))
-    for path in root.rglob("metrics.json"):
+    for path in result_files(root, "metrics.json"):
         with path.open(encoding="utf-8") as handle:
             row = json.load(handle)
         groups[(row["problem"], row["n_obj"])][row["algorithm"]].append(row)
@@ -144,7 +145,7 @@ def boxplots(root: Path, output: Path) -> None:
 
 def parallel_coordinates(root: Path, output: Path) -> None:
     records = []
-    for path in root.rglob("final_population.csv"):
+    for path in result_files(root, "final_population.csv"):
         config_path = path.parent / "config.json"
         with config_path.open(encoding="utf-8") as handle:
             cfg = json.load(handle)

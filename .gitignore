@@ -30,6 +30,9 @@ code.exe
 *.o
 *.obj
 
+# 手工代码备份
+*.bak_*
+
 # ── 系统文件 ──
 .DS_Store
 Thumbs.db

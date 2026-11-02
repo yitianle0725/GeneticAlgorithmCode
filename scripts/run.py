@@ -29,6 +29,8 @@ from iemoec_experiment.metrics import (  # noqa: E402
 )
 from iemoec_experiment.problems import make_problem  # noqa: E402
 from iemoec_experiment.runner import run_case  # noqa: E402
+from iemoec_experiment.result_store import legacy_result_candidates  # noqa: E402
+from iemoec_experiment.manifest import result_files, task_key  # noqa: E402
 
 
 C_DTLZ_PROBLEMS = ("c1dtlz1", "c1dtlz3", "c2dtlz2", "c3dtlz4")
@@ -212,6 +214,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--run-name", help="results 下的实验名；固定名称便于断点续跑")
     parser.add_argument("--output-root", default=str(PROJECT_ROOT / "results"))
+    parser.add_argument(
+        "--result-store", type=Path,
+        help="跨批次共享的算法结果库，默认 <output-root>/algorithms",
+    )
     parser.add_argument("--history-points", type=int, default=20)
     parser.add_argument("--history-hv", action="store_true", help="在检查点计算 HV（高维实验不建议）")
     parser.add_argument(
@@ -473,6 +479,7 @@ def resolve_cases(args) -> list[ExperimentCase]:
                     timing_only=args.timing_only,
                     iemoec=iemoec,
                     iemoeo=iemoeo,
+                    result_store=str(args.result_store or Path(args.output_root) / "algorithms"),
                 )
                 case.validate()
                 cases.append(case)
@@ -490,7 +497,12 @@ def ensure_metric_schema_isolated(cases: list[ExperimentCase]) -> None:
         raise ValueError("同一批次不能混合约束与无约束 metric schema")
     requested_schema = next(iter(requested_schemas))
     schemas = set()
-    for path in root.rglob("metrics.json") if root.exists() else ():
+    manifest_path = root / "experiment_manifest.json"
+    paths = (
+        result_files(root, "metrics.json")
+        if manifest_path.exists() else root.rglob("metrics.json")
+    )
+    for path in paths:
         try:
             with path.open(encoding="utf-8") as handle:
                 schemas.add(json.load(handle).get("metric_schema_version"))
@@ -516,10 +528,11 @@ def main() -> int:
             Path(cases[0].output_root) / "experiment_manifest.json",
             manifest,
         )
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2
     print(f"实验任务: {len(cases)} | workers={args.workers}")
+    print(f"算法结果库: {cases[0].result_store} | 相同配置自动复用，--force 强制重跑")
     for case in cases[:8]:
         print(
             f"  {case.normalized_algorithm:7s} {case.normalized_problem.upper():8s} "
@@ -534,24 +547,32 @@ def main() -> int:
 
     failures = []
     completed = skipped = 0
+    legacy = legacy_result_candidates(Path(args.output_root), cases) if not args.force else {}
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = {executor.submit(run_case, case, args.force, args.verbose_fe): case for case in cases}
-        for future in as_completed(futures):
+        futures = {
+            executor.submit(
+                run_case, case, args.force, args.verbose_fe,
+                legacy.get(task_key(case.to_dict()), ()),
+            ): case for case in cases
+        }
+        for index, future in enumerate(as_completed(futures), start=1):
             case = futures[future]
+            progress = f"[{index}/{len(cases)}]"
             label = f"{case.normalized_problem.upper()} M{case.n_obj} {case.normalized_algorithm} seed={case.seed}"
             try:
                 result = future.result()
                 if result["status"] == "skipped":
                     skipped += 1
-                    print(f"[跳过] {label}")
+                    source = f" | 导入旧结果: {result['reused_from']}" if "reused_from" in result else " | 复用已有结果"
+                    print(f"{progress}[跳过] {label}{source}")
                 else:
                     completed += 1
-                    print(f"[完成] {label} FE={result['n_eval']} {result['runtime_seconds']:.2f}s")
+                    print(f"{progress}[完成] {label} FE={result['n_eval']} {result['runtime_seconds']:.2f}s")
                     if "evaluation_breakdown" in result:
                         print(f"  FE 分账: {result['evaluation_breakdown']}")
             except Exception as exc:  # 单任务失败不能中断整个正式批次
                 failures.append({"case": case.to_dict(), "error": repr(exc)})
-                print(f"[失败] {label}: {exc}", file=sys.stderr)
+                print(f"{progress}[失败] {label}: {exc}", file=sys.stderr)
 
     root = Path(cases[0].output_root)
     root.mkdir(parents=True, exist_ok=True)

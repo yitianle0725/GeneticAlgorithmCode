@@ -529,6 +529,7 @@ class ExperimentCase:
     timing_only: bool = False
     iemoec: IEMOECConfig = field(default_factory=IEMOECConfig)
     iemoeo: IEMOEOConfig = field(default_factory=IEMOEOConfig)
+    result_store: str | None = None
 
     def validate(self) -> None:
         if self.algorithm.upper() not in SUPPORTED_ALGORITHMS:
@@ -571,6 +572,10 @@ class ExperimentCase:
 
     @property
     def output_dir(self) -> Path:
+        if self.result_store is not None:
+            from .result_store import stored_result_directory
+
+            return stored_result_directory(self)
         return (
             Path(self.output_root)
             / self.normalized_problem.upper()
@@ -623,6 +628,8 @@ class ExperimentCase:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        # 存储位置不属于算法配置；旧格式和历史配置保持兼容。
+        data.pop("result_store")
         if self.normalized_algorithm == "IEMOEO":
             data.pop("iemoec")
             weights = self.iemoeo.objective_weights

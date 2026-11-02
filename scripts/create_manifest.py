@@ -11,8 +11,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from iemoec_experiment.config import ExperimentCase, IEMOECConfig  # noqa: E402
-from iemoec_experiment.manifest import build_manifest, task_key, write_manifest  # noqa: E402
+from iemoec_experiment.config import ExperimentCase, IEMOECConfig, IEMOEOConfig  # noqa: E402
+from iemoec_experiment.manifest import build_manifest, result_files, task_key, write_manifest  # noqa: E402
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -26,12 +26,19 @@ def parse_seeds(text: str) -> list[int]:
     return sorted(values)
 
 
-def load_case(path: Path) -> ExperimentCase:
+def load_case(path: Path, output_root: Path | None = None) -> ExperimentCase:
     with path.open(encoding="utf-8") as handle:
         data = json.load(handle)
     for field in ("algorithm_variant", "algorithm_schema_version", "algorithm_label"):
         data.pop(field, None)
-    data["iemoec"] = IEMOECConfig(**data["iemoec"])
+    if "iemoec" in data:
+        data["iemoec"] = IEMOECConfig(**data["iemoec"])
+    if "iemoeo" in data:
+        data["iemoeo"] = IEMOEOConfig(**data["iemoeo"])
+    if (path.parent / "storage_identity.json").exists():
+        data["result_store"] = str(path.parent.parents[4])
+    if output_root is not None:
+        data["output_root"] = str(output_root)
     return ExperimentCase(**data)
 
 
@@ -45,7 +52,12 @@ def main() -> int:
     parser.add_argument("--metric-schema-version", type=int, required=True)
     args = parser.parse_args()
 
-    cases = [load_case(path) for path in args.results.rglob("config.json")]
+    config_paths = (
+        result_files(args.results, "config.json")
+        if (args.results / "experiment_manifest.json").exists()
+        else args.results.rglob("config.json")
+    )
+    cases = [load_case(path, args.results) for path in config_paths]
     by_key = {task_key(case.to_dict()): case for case in cases}
     if len(by_key) != len(cases):
         raise SystemExit("configuration directory contains duplicate task keys")

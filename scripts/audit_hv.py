@@ -14,7 +14,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from iemoec_experiment.manifest import load_manifest, task_key  # noqa: E402
+from iemoec_experiment.manifest import load_manifest, result_directory, task_key  # noqa: E402
 from iemoec_experiment.metrics import MetricSuite  # noqa: E402
 from iemoec_experiment.problems import make_problem  # noqa: E402
 
@@ -55,10 +55,7 @@ def main() -> int:
     missing = []
     for task in manifest["tasks"]:
         problem_name, n_obj, algorithm, seed = task_key(task)
-        directory = (
-            args.results / problem_name.upper() / f"M{n_obj}"
-            / algorithm / f"seed_{seed:03d}"
-        )
+        directory = result_directory(args.results, task)
         population_path = directory / "final_population.csv"
         metrics_path = directory / "metrics.json"
         config_path = directory / "config.json"

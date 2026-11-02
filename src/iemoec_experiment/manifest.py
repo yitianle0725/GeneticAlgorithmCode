@@ -30,7 +30,47 @@ def task_key(data: dict) -> tuple[str, int, str, int]:
 
 def _task_from_case(case: ExperimentCase) -> dict:
     data = case.to_dict()
-    return {field: data[field] for field in TASK_FIELDS}
+    task = {field: data[field] for field in TASK_FIELDS}
+    if case.result_store is not None:
+        from .result_store import result_identity
+
+        task["result_path"] = os.path.relpath(case.output_dir, case.output_root)
+        task["result_identity"] = result_identity(case)
+    return task
+
+
+def result_directory(root: Path, task: dict) -> Path:
+    """新版清单引用共享结果；旧版清单仍按原来的目录结构读取。"""
+    if "result_path" in task:
+        return (root / task["result_path"]).resolve()
+    problem, n_obj, algorithm, seed = task_key(task)
+    return root / problem.upper() / f"M{n_obj}" / algorithm / f"seed_{seed:03d}"
+
+
+def result_files(root: Path, filename: str, manifest: dict | None = None) -> list[Path]:
+    manifest = manifest if manifest is not None else load_manifest(root)
+    if not any("result_path" in task for task in manifest["tasks"]):
+        return sorted(root.rglob(filename))
+    paths = []
+    for task in manifest["tasks"]:
+        directory = result_directory(root, task)
+        path = directory / filename
+        if not path.exists():
+            continue
+        if "result_path" not in task:
+            paths.append(path)
+            continue
+        identity_path = directory / "storage_identity.json"
+        if not identity_path.exists():
+            continue  # 尚未完整提交的结果交给 manifest 完整性校验报告。
+        try:
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"无法读取结果标识：{identity_path}") from exc
+        if identity.get("identity") != task.get("result_identity"):
+            raise RuntimeError(f"结果配置标识与批次清单不一致：{directory}")
+        paths.append(path)
+    return paths
 
 
 def build_manifest(
@@ -67,7 +107,8 @@ def write_manifest(path: Path, manifest: dict) -> None:
             existing = json.load(handle)
         if existing != manifest:
             raise ValueError(
-                f"{path} does not match the requested experiment configuration"
+                f"{path} does not match the requested experiment configuration; "
+                "请更换 --run-name，兼容的算法结果仍会跨批次复用"
             )
         return
     temporary = path.with_suffix(path.suffix + ".tmp")

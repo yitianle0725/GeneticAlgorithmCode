@@ -1,5 +1,9 @@
 # IEMOEC：可复现的多目标进化优化实验平台
 
+CLI 默认把算法结果存放到 `results/algorithms/`，实验批次保存清单、失败记录及统计报告。
+更换 `--run-name` 不会重跑已经完成的同配置任务，汇总与绘图命令保持不变。
+复用条件和旧结果导入规则见第 10 节。
+
 本项目基于 **Python 3.12+** 与 **pymoo 0.6.2**，用于研究和验证多目标极值组合算法
 IEMOEC（Independent Evolution and Multi-objective Extremum Combination）。代码库同时提供
 NSGA-II、NSGA-III、MOEA/D-TCH、MOEA/D-PBI、RVEA、C-TAEA 和 AGE-MOEA2-Stable 等公共基线，
@@ -90,7 +94,7 @@ python -c "import pymoo; print(pymoo.__version__)"
 python -m unittest discover -s tests -v
 ```
 
-当前测试集包含 80 项测试，覆盖公共初始化、FE 审计、约束指标、feasibility-first、
+测试集覆盖跨批次结果复用、历史基线导入、公共初始化、FE 审计、约束指标、feasibility-first、
 S2/S3 结构、S4 封闭谱系、有限邻域资格检查、坐标继承、schema 隔离和断点续跑。
 
 ## 3. 快速开始
@@ -123,7 +127,7 @@ python scripts/run.py --preset benchmark_smoke `
 完成=<数量> 跳过=<数量> 失败=<数量> | <结果目录>
 ```
 
-相同配置和 run name 可以安全续跑，已经完成的任务会自动跳过。配置发生变化时必须更换
+相同配置可以安全续跑，也可以换 run name 复用已经完成的算法任务。配置发生变化时必须更换
 `--run-name`；即使指定 `--force`，也不允许把不同 algorithm schema 或 metric schema 混入同一目录。
 
 约束第一阶段的 48 项冒烟实验已经固化为独立 preset，并会自动选择
@@ -349,7 +353,8 @@ python scripts/run.py --preset custom `
 常用参数：
 
 - `--dry-run`：只生成并展示任务清单；
-- `--force`：重跑完全相同的配置；
+- `--force`：显式强制重跑所选算法，绕过共享结果复用和旧结果导入；
+- `--result-store`：自定义共享算法结果库，默认 `results/algorithms`；
 - `--run-name`：固定输出批次名，支持断点续跑；
 - `--workers`：任务级并行数；
 - `--evals-per-pop`：设置 `MaxFEs=N×倍数`；
@@ -366,26 +371,76 @@ S4 会拒绝 S2/S3 专属的共享繁殖、参考方向 survival、状态保留�
 ## 10. 输出与审计
 
 ```text
-results/<run-name>/
-  experiment_manifest.json
-  failures.json
-  DTLZ2/
-    M5/
-      IEMOEC/
-        seed_007/
-          config.json
-          metrics.json
-          history.csv
-          final_population.csv
-          iemoec_diagnostics.csv
+results/
+  algorithms/
+    NSGA2/
+      DTLZ2/
+        M3/
+          seed_001/
+            FE36400_<配置与实现摘要>/
+              config.json
+              metrics.json
+              history.csv
+              final_population.csv
+              storage_identity.json
+    NSGA3/
+    MOEAD/
+    MOEADPBI/
+    IEMOEO/
+  <run-name>/
+    experiment_manifest.json
+    failures.json
+    summary.csv
+    figures/
 ```
+
+每个 `seed_001` 表示一次具体随机种子，而不是总种子数量。增加到 30 个 seed 后，已有的
+seed 不会重跑；增加目标数或问题时，也只计算缺失的任务。
+
+FE 预算、实际使用的算法参数、指标与历史记录参数、schema、实现摘要及依赖版本共同决定
+是否可复用。`200N` 与 `400N`、不同指标采样量、普通运行与 `--timing-only` 分开保存。
+公共 baseline 不把 IEMOEC 的 variant 或参数纳入复用条件，因此改进 IEMOEO 或切换
+IEMOEC 对照版本都不会使这些 baseline 失效。自定义算法自己的源码变化会生成新目录。
+修改公共算子、问题定义或指标等共享实现时，相关结果会重新计算。
+
+首次请求某个 baseline 时，程序会读取同一个 `--output-root` 下的旧批次清单，寻找原结构
+`<run-name>/<问题>/M<目标数>/<算法>/seed_<编号>` 的结果。只有配置、schema、实际 FE
+和必要文件完整匹配才会复制到共享结果库，并打印“导入旧结果”；原目录和数据保持不变。
+旧结果没有源码/环境摘要，因此历史导入依据已有 schema 与配置，
+`storage_identity.json` 会记录来源并标注未验证历史实现。IEMOEC/IEMOEO 的旧结果不自动导入，
+避免把曾经改过但没有提升 schema 的实现误认为当前版本。
+
+结果已经迁入后，后续批次直接读取共享目录。没有 manifest 的历史目录不自动导入，可先用
+`scripts/create_manifest.py` 补齐清单。旧批次仍可按原命令汇总和绘图。旧批次改用新存储格式时，
+请使用新的 `--run-name`，以保留原有审计清单。
+
+例如，使用已经运行过的 seeds 1–30，对全部算法建立新的比较批次：
+
+```powershell
+python scripts/run.py --preset formal `
+  --algorithms NSGA2 NSGA3 MOEAD MOEADPBI RVEA AGEMOEA2STABLE IEMOEC IEMOEO `
+  --iemoec-variant s3_elite `
+  --objectives 3,4,5,8,10,15 --seeds 1-30 `
+  --workers 4 --run-name compare_iemoeo_v2 --dry-run
+```
+
+核对后去掉 `--dry-run`。已具备相同预算及配置的 baseline 会导入/跳过；以前没跑过的
+四目标或其他缺失场景会补算。以后改进 IEMOEO 后，使用新批次名执行同一组算法，
+即可在复用 baseline 的同时重新测试 IEMOEO，并生成完整比较报告。
+如果只想执行 IEMOEO，可指定 `--algorithms IEMOEO`，但该批次报告也只包含 IEMOEO。
+换成 seeds 31–60 时，由于属于新任务，baseline 也需要补算。
+
+运行信息使用 `[已处理/总任务][完成]`、`[已处理/总任务][跳过]` 和 `[已处理/总任务][失败]`。
+`--force` 会重算全部所选任务并更新共享文件，也会影响引用它们的批次；日常比较不要使用。
+同一任务正在运行时会使用锁目录防止重复计算；进程异常退出留下的锁应在确认进程结束后清理。
 
 主要文件：
 
-- `experiment_manifest.json`：批次声明的全部任务和 schema；
+- `experiment_manifest.json`：批次声明的全部任务、schema、共享结果路径和配置摘要；
 - `failures.json`：失败任务，完整成功时为 `[]`；
 - `config.json`：规范化算法配置、variant、schema 和预算；
 - `metrics.json`：最终指标、FE、初始化哈希和时间分解；
+- `storage_identity.json`：共享结果的标识、实现与依赖版本，以及旧结果来源；
 - `history.csv`：固定 FE 检查点的收敛历史；
 - `final_population.csv`：最终决策变量、目标值和可用的 provenance；
 - `iemoec_diagnostics.csv`：IEMOEC 每轮预算、来源贡献、覆盖和记忆诊断；
@@ -426,6 +481,7 @@ src/iemoec_experiment/
   iemoeo.py               IE-MOEO 独立进化与变量块组合核心
   metrics.py              参考前沿与质量指标
   manifest.py             实验任务清单
+  result_store.py         按算法归档、跨批次复用和历史基线导入
   runner.py               单任务执行、计时和标准输出
 scripts/
   run.py                   统一批量实验入口

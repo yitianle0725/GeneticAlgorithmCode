@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from iemoec_experiment.metrics import METRIC_SCHEMA_VERSION  # noqa: E402
-from iemoec_experiment.manifest import load_manifest, validate_result_rows  # noqa: E402
+from iemoec_experiment.manifest import load_manifest, result_files, validate_result_rows  # noqa: E402
 
 
 METRICS = (
@@ -45,7 +45,7 @@ ALGORITHM_LABELS = {
 def load_rows(root: Path, allow_incomplete: bool = False) -> tuple[list[dict], dict]:
     manifest = load_manifest(root)
     rows = []
-    for path in root.rglob("metrics.json"):
+    for path in result_files(root, "metrics.json", manifest):
         with path.open(encoding="utf-8") as handle:
             row = json.load(handle)
         if row.get("metric_schema_version") != manifest["metric_schema_version"]:
