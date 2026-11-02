@@ -1,0 +1,62 @@
+{
+  "name": "iemoeo_mechanisms_v1",
+  "description": "只运行 IE-MOEO 内部对照，不重跑七种性能参照；所有结论允许被否证。",
+  "variants": {
+    "full": {"label": "当前完整 IE-MOEO", "arguments": []},
+    "shared": {"label": "共享交配池，保留岛内更新", "arguments": ["--no-isolation"]},
+    "rank": {"label": "关闭参考方向维护，末层随机截断", "arguments": ["--no-diversity-maintenance"]},
+    "shared_rank": {"label": "共享交配池且关闭参考方向维护", "arguments": ["--no-isolation", "--no-diversity-maintenance"]},
+    "unchecked": {"label": "关闭邻域代表资格检查", "arguments": ["--no-parent-check"]},
+    "sbx": {"label": "组合阶段改用 SBX，保留变异与修复", "arguments": ["--combination-method", "sbx_only"]},
+    "random_coord": {"label": "逐坐标继承，保留变异与修复", "arguments": ["--combination-method", "random_coord"]},
+    "shared_sbx": {"label": "共享交配池与 SBX 组合", "arguments": ["--no-isolation", "--combination-method", "sbx_only"]},
+    "radius_005": {"label": "资格检查半径 0.05", "arguments": ["--principle-probe-radius", "0.05"]},
+    "radius_02": {"label": "资格检查半径 0.2", "arguments": ["--principle-probe-radius", "0.2"]},
+    "radius_10": {"label": "资格检查半径 1.0，仅用于激活诊断", "arguments": ["--principle-probe-radius", "1.0"]},
+    "local_3": {"label": "每轮局部进化 3 代", "arguments": ["--inner-generations-early", "3", "--inner-generations-late", "3"]},
+    "local_5": {"label": "每轮局部进化 5 代", "arguments": ["--inner-generations-early", "5", "--inner-generations-late", "5"]},
+    "uniform_2": {"label": "均匀划分两块", "arguments": ["--block-size", "2"]},
+    "known_2": {"label": "位置/距离两块，不宣称完全可分", "arguments": ["--block-size", "2", "--block-mode", "known_separable"]},
+    "representatives_only": {"label": "移除非代表局部个体候选池", "arguments": ["--no-elitist-pool"]}
+  },
+  "suites": {
+    "core": ["full", "shared", "rank", "shared_rank", "unchecked", "sbx", "random_coord", "shared_sbx"],
+    "sensitivity": ["full", "radius_005", "radius_02", "radius_10", "local_3", "local_5", "uniform_2", "known_2", "representatives_only"]
+  },
+  "contrasts": [
+    {"id": "isolation_with_reference", "target": "full", "control": "shared", "claim": "独立交配的贡献"},
+    {"id": "isolation_without_reference", "target": "rank", "control": "shared_rank", "claim": "没有参考方向维护时的独立交配贡献"},
+    {"id": "reference_maintenance", "target": "full", "control": "rank", "claim": "是否仍依赖显式多样性维护"},
+    {"id": "neighborhood_check", "target": "full", "control": "unchecked", "claim": "邻域代表资格检查的贡献，不等同整个亲本选择原理"},
+    {"id": "blocks_vs_sbx", "target": "full", "control": "sbx", "claim": "结构化组合相对 SBX 的贡献"},
+    {"id": "blocks_vs_coordinates", "target": "full", "control": "random_coord", "claim": "整块继承相对逐坐标继承的贡献"},
+    {"id": "blocks_without_isolation", "target": "shared", "control": "shared_sbx", "claim": "共享交配下结构化组合的贡献"},
+    {"id": "isolation_with_sbx", "target": "sbx", "control": "shared_sbx", "claim": "没有结构化组合时的独立交配贡献"},
+    {"id": "radius_005", "target": "radius_005", "control": "full", "claim": "半径敏感性"},
+    {"id": "radius_02", "target": "radius_02", "control": "full", "claim": "半径敏感性"},
+    {"id": "radius_10", "target": "radius_10", "control": "full", "claim": "半径敏感性与激活诊断"},
+    {"id": "local_3", "target": "local_3", "control": "full", "claim": "局部代数敏感性，包含 FE 分配中介效应"},
+    {"id": "local_5", "target": "local_5", "control": "full", "claim": "局部代数敏感性，包含 FE 分配中介效应"},
+    {"id": "uniform_block_count", "target": "uniform_2", "control": "full", "claim": "块数敏感性"},
+    {"id": "known_blocks", "target": "known_2", "control": "uniform_2", "claim": "相同块数下标准位置/距离分组的贡献"},
+    {"id": "candidate_pool", "target": "full", "control": "representatives_only", "claim": "保留非代表局部个体的工程贡献"}
+  ],
+  "interactions": [
+    {"id": "isolation_x_reference", "cells": ["full", "shared", "rank", "shared_rank"]},
+    {"id": "isolation_x_blocks", "cells": ["full", "shared", "sbx", "shared_sbx"]}
+  ],
+  "stages": {
+    "smoke": {"problems": ["dtlz2", "wfg9"], "objectives": "3", "seeds": "1", "evals_per_pop": 20, "timing_only": false},
+    "pilot": {"problems": ["dtlz2", "dtlz3", "dtlz7", "wfg3", "wfg6", "wfg9"], "objectives": "3,4,10", "seeds": "1-5", "evals_per_pop": 200, "timing_only": false},
+    "confirm": {"problems": ["dtlz2", "dtlz3", "dtlz7", "wfg3", "wfg6", "wfg9"], "objectives": "3,4,10", "seeds": "31-60", "evals_per_pop": 400, "timing_only": false},
+    "many_objective": {"problems": ["dtlz2", "dtlz3", "dtlz7", "wfg3", "wfg6", "wfg9"], "objectives": "5,8,15", "seeds": "31-60", "evals_per_pop": 400, "timing_only": false},
+    "timing": {"problems": ["dtlz2", "wfg9"], "objectives": "3,10", "seeds": "31-35", "evals_per_pop": 200, "timing_only": true}
+  },
+  "pending_controls": [
+    {"id": "local_representative_selection", "required_for": "局部竞争所得亲本优于随机或全局高适应度亲本", "reason": "目前 --no-parent-check 只移除邻域资格检查，未移除局部最佳代表选择；需等 FE 的岛内随机代表和全局标量最佳代表控制"},
+    {"id": "true_crowding_control", "required_for": "独立进化可替代拥挤距离", "reason": "当前 rank 对照是随机截断而非拥挤距离；需隔离开关×真实 rank-and-crowding 的同一核心控制，并追踪目标近似但决策远离的个体"},
+    {"id": "no_combination_equal_budget", "required_for": "跨岛组合本身优于无组合", "reason": "SBX 仍是跨亲本重组；需关闭组合并明确把相同 FE 重新分配到局部进化的策略"},
+    {"id": "island_parallelism", "required_for": "岛内并行效率更高", "reason": "--workers 仅并行独立实验任务，不是岛内并行；需固定硬件和 FE 的 1/2/4/8 核加速及通信开销实验"},
+    {"id": "network_drl", "required_for": "网络调度与 DRL 协同的应用优势", "reason": "标准连续函数不能替代有约束网络场景、动态扰动和 DRL 联合消融"}
+  ]
+}

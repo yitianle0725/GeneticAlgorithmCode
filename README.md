@@ -580,3 +580,19 @@ python scripts/plot_results.py results/smoke_iemoeo_s3 --kind all
 
 秩和结果保存为 `wilcoxon_rank_sum_holm.csv`，胜/平/负保存为 `win_tie_loss_rank_sum.csv`。
 少量 seed 的冒烟结果仅用于实现验证；正式比较和消融仍需按冻结配置完成 30 个独立 seed。
+
+## 14. IE-MOEO pilot 分析与机制实验
+
+已登记的机制方案见 [机制实验方案](reports/iemoeo_mechanism_plan.md)，本次 1920 项 pilot 的
+审计和统计解释见 [pilot 分析](reports/iemoeo_pilot_200n_v1_analysis.md)。机器可读配置位于
+`experiments/iemoeo_mechanisms_v1.json`。
+
+```powershell
+python scripts/analyze_iemoeo_pilot.py results/iemoeo_pilot_200n_v1
+python scripts/run_iemoeo_mechanisms.py --stage pilot --workers 4
+```
+
+第二条命令仅登记 720 项 IE-MOEO 内部机制任务；加 `--execute` 实际计算，不运行其他七种性能参照。
+完成后用 `python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v1/pilot/core`
+生成预登记对照、交互和机制激活诊断。S3-Elite 不是独立进化的单因素控制，五个 seed 的
+不显著结果也不代表等效；尚缺的真实拥挤距离、代表选择及无组合等预算控制在方案中明确标注。
