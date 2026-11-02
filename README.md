@@ -515,7 +515,7 @@ docs/
 
 ## 13. IE-MOEO
 
-`IEMOEO`（标签 `IE-MOEO`，独立 algorithm schema 1）新增为独立算法。
+`IEMOEO`（标签 `IE-MOEO`，当前独立 algorithm schema 2）是独立算法；schema 1 历史结果保持原样。
 本研究线将既有 IEMOEC 作为**前期对照版本**，其结果不能归因到隔离、亲本选择或块组合中的单一机制。
 新增实现不修改 IEMOEC 的版本配置、算法核心和历史结果格式。
 
@@ -545,7 +545,10 @@ python scripts/run.py --preset custom `
 | `--combination-pairs-limit 25` | 无放回抽取不同亲本索引对的上限，每对产生一个候选后代 |
 | `--block-size 4` | uniform 的块数；大于变量数时每个坐标独立成块 |
 | `--block-mode uniform/known_separable` | 坐标等分或 DTLZ/WFG 位置与距离变量两块 |
-| `--combination-method structured/random_coord/sbx_only` | 整块继承、逐坐标继承或 SBX 对照 |
+| `--combination-method structured/random_coord/sbx_only/none` | 整块继承、逐坐标继承、SBX 或无显式全局组合；none 将名义组合 FE 转给局部搜索 |
+| `--representative-selection local_best/local_random/global_best` | 每岛最佳、每岛随机或联合池标量最佳代表；后两者只用作机制对照 |
+| `--iemoeo-survival nsga3/rank/rank_crowding` | 参考方向、等级加随机截断或真实 NSGA-II 拥挤距离；默认仍是 nsga3 |
+| `--iemoeo-selection-audit` | 固定独立随机流记录目标接近但决策远离的候选对保留情况，不消耗 FE |
 | `--no-isolation` | 局部进化的交配池改为全部小群体的联合池 |
 | `--no-parent-check` | 所有小群体代表直接进入资格池 |
 | `--no-block-combination` | 组合阶段改用 SBX，仍执行变异与修复 |
@@ -583,16 +586,30 @@ python scripts/plot_results.py results/smoke_iemoeo_s3 --kind all
 
 ## 14. IE-MOEO pilot 分析与机制实验
 
-已登记的机制方案见 [机制实验方案](reports/iemoeo_mechanism_plan.md)，本次 1920 项 pilot 的
-审计和统计解释见 [pilot 分析](reports/iemoeo_pilot_200n_v1_analysis.md)。机器可读配置位于
-`experiments/iemoeo_mechanisms_v1.json`。
+原 pilot 的审计见 [pilot 分析](reports/iemoeo_pilot_200n_v1_analysis.md)，原 16 次机制冒烟的
+结论及新对照说明见 [机制冒烟评估](reports/iemoeo_smoke_mechanism_assessment.md)。
+原 [v1 方案](reports/iemoeo_mechanism_plan.md) 和登记文件保持不变，新方案位于
+`experiments/iemoeo_mechanisms_v2.json`，当前调度器默认使用 v2。
 
 ```powershell
 python scripts/analyze_iemoeo_pilot.py results/iemoeo_pilot_200n_v1
-python scripts/run_iemoeo_mechanisms.py --stage pilot --workers 4
+python scripts/run_iemoeo_mechanisms.py --stage pilot --suite attribution --workers 4
 ```
 
-第二条命令仅登记 720 项 IE-MOEO 内部机制任务；加 `--execute` 实际计算，不运行其他七种性能参照。
-完成后用 `python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v1/pilot/core`
-生成预登记对照、交互和机制激活诊断。S3-Elite 不是独立进化的单因素控制，五个 seed 的
-不显著结果也不代表等效；尚缺的真实拥挤距离、代表选择及无组合等预算控制在方案中明确标注。
+第二条命令只登记 1350 项 IE-MOEO 内部任务；加 `--execute` 实际计算，不运行其他七种性能参照。
+新目录为 `results/iemoeo_mechanisms_v2/pilot/attribution`，完成后作为
+`scripts/summarize_iemoeo_mechanisms.py` 的参数生成对照、交互、激活和选择保留诊断。
+也可以选择 `--suite parents`（450 项）、`crowding`（540 项）、`combination`（630 项）分阶段计算；
+同配置的 full 等锚点会在套件之间自动复用。完整 attribution 则保证全部登记交互的四个单元都齐全。
+
+schema 2 新增代表选择、真实拥挤距离和无全局组合控制。none 将每轮
+`min(亲本索引对数, combination_pairs_limit, 剩余FE)` 作为名义额度，转给原交配规则的局部搜索，
+不增加总 FE、不虚构缓存命中费用；完整版本的实际组合 FE 可能因重复候选而低于名义额度。
+这比较的是“组合阶段与局部搜索”的资源分配策略，不宣称各阶段实际 FE 精确相同。
+
+联合池最佳对照先对决策去重，避免重复克隆占用代表名额；诊断另外记录资格检查是否真正改变了
+最终亲本池，避免把“出现拒绝”误当成机制已起作用。
+新增诊断不会使用搜索随机流；旧八组的默认搜索行为进行回归核对。IE-MOEO 源码和 schema 变化后
+使用新结果目录，不混入 v1；公共 baseline 的配置与实现未改动，仍可复用。
+S3-Elite 不是独立进化的单因素控制，单 seed 的 A12 标签不再输出为“large”，统一标记为样本不足解释。
+数学极值认证、岛内并行、低复杂度阶数及网络/DRL 联合优势仍没有被这些对照证明。

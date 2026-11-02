@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run import build_parser, resolve_cases
 from iemoec_experiment.result_store import implementation_signature
 
-DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v1.json"
+DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v2.json"
 
 
 def build_commands(plan: dict, stage: str, suite: str, output_root: Path,
@@ -23,6 +23,9 @@ def build_commands(plan: dict, stage: str, suite: str, output_root: Path,
     if configuration["timing_only"] and workers != 1:
         raise ValueError("干净计时必须使用 --workers 1")
     commands = []
+    common_arguments = list(plan.get("common_arguments", []))
+    if configuration["timing_only"]:
+        common_arguments = [argument for argument in common_arguments if argument != "--iemoeo-selection-audit"]
     for name in plan["suites"][suite]:
         variant = plan["variants"][name]
         arguments = [
@@ -32,7 +35,7 @@ def build_commands(plan: dict, stage: str, suite: str, output_root: Path,
             "--evals-per-pop", str(configuration["evals_per_pop"]),
             "--output-root", str(output_root / stage / suite),
             "--result-store", str(result_store), "--run-name", name,
-            "--workers", str(workers), *variant["arguments"],
+            "--workers", str(workers), *common_arguments, *variant["arguments"],
         ]
         if configuration["timing_only"]:
             arguments.append("--timing-only")
@@ -75,13 +78,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
     parser.add_argument("--stage", choices=["smoke", "pilot", "confirm", "many_objective", "timing"], default="pilot")
-    parser.add_argument("--suite", choices=["core", "sensitivity"], default="core")
-    parser.add_argument("--output-root", type=Path, default=ROOT / "results" / "iemoeo_mechanisms_v1")
+    parser.add_argument("--suite", default="core", help="方案中的套件名，例如 attribution/parents/crowding/combination")
+    parser.add_argument("--output-root", type=Path)
     parser.add_argument("--result-store", type=Path, default=ROOT / "results" / "algorithms")
     parser.add_argument("--workers", type=int)
     parser.add_argument("--execute", action="store_true", help="实际执行；省略时仅登记和显示清单")
     args = parser.parse_args()
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    if args.suite not in plan["suites"]:
+        parser.error(f"该方案的 suite 可选：{', '.join(plan['suites'])}")
+    args.output_root = args.output_root or ROOT / "results" / plan["name"]
     workers = args.workers if args.workers is not None else (1 if args.stage == "timing" else 4)
     if workers < 1:
         parser.error("workers 必须至少为 1")

@@ -37,7 +37,7 @@ def implementation_signature(algorithm: str) -> dict:
         "constraints", "metrics", "runner",
     ]
     if algorithm == "IEMOEO":
-        modules.append("iemoeo")
+        modules.extend(["iemoeo", "iemoeo_diagnostics"])
     elif algorithm == "IEMOEC":
         modules.extend([
             "iemoec", "principle", "directions", "directional_memory", "source_budget",

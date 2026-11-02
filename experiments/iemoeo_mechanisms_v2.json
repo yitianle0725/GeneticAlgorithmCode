@@ -1,0 +1,535 @@
+{
+  "name": "iemoeo_mechanisms_v2",
+  "description": "schema 2：补齐代表选择、真实拥挤距离、无全局组合与局部预算转移对照；冒烟不证明性能贡献。",
+  "variants": {
+    "full": {
+      "label": "当前完整 IE-MOEO",
+      "arguments": []
+    },
+    "shared": {
+      "label": "共享交配池，保留岛内更新",
+      "arguments": [
+        "--no-isolation"
+      ]
+    },
+    "rank": {
+      "label": "关闭参考方向维护，末层随机截断",
+      "arguments": [
+        "--no-diversity-maintenance"
+      ]
+    },
+    "shared_rank": {
+      "label": "共享交配池且关闭参考方向维护",
+      "arguments": [
+        "--no-isolation",
+        "--no-diversity-maintenance"
+      ]
+    },
+    "unchecked": {
+      "label": "关闭邻域代表资格检查",
+      "arguments": [
+        "--no-parent-check"
+      ]
+    },
+    "sbx": {
+      "label": "组合阶段改用 SBX，保留变异与修复",
+      "arguments": [
+        "--combination-method",
+        "sbx_only"
+      ]
+    },
+    "random_coord": {
+      "label": "逐坐标继承，保留变异与修复",
+      "arguments": [
+        "--combination-method",
+        "random_coord"
+      ]
+    },
+    "shared_sbx": {
+      "label": "共享交配池与 SBX 组合",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "sbx_only"
+      ]
+    },
+    "radius_005": {
+      "label": "资格检查半径 0.05",
+      "arguments": [
+        "--principle-probe-radius",
+        "0.05"
+      ]
+    },
+    "radius_02": {
+      "label": "资格检查半径 0.2",
+      "arguments": [
+        "--principle-probe-radius",
+        "0.2"
+      ]
+    },
+    "radius_10": {
+      "label": "资格检查半径 1.0，仅用于激活诊断",
+      "arguments": [
+        "--principle-probe-radius",
+        "1.0"
+      ]
+    },
+    "local_3": {
+      "label": "每轮局部进化 3 代",
+      "arguments": [
+        "--inner-generations-early",
+        "3",
+        "--inner-generations-late",
+        "3"
+      ]
+    },
+    "local_5": {
+      "label": "每轮局部进化 5 代",
+      "arguments": [
+        "--inner-generations-early",
+        "5",
+        "--inner-generations-late",
+        "5"
+      ]
+    },
+    "uniform_2": {
+      "label": "均匀划分两块",
+      "arguments": [
+        "--block-size",
+        "2"
+      ]
+    },
+    "known_2": {
+      "label": "位置/距离两块，不宣称完全可分",
+      "arguments": [
+        "--block-size",
+        "2",
+        "--block-mode",
+        "known_separable"
+      ]
+    },
+    "representatives_only": {
+      "label": "移除非代表局部个体候选池",
+      "arguments": [
+        "--no-elitist-pool"
+      ]
+    },
+    "local_random": {
+      "label": "每个非空岛随机选一个代表",
+      "arguments": [
+        "--representative-selection",
+        "local_random"
+      ]
+    },
+    "global_best": {
+      "label": "联合局部池按标量适应度选相同数量代表槽位",
+      "arguments": [
+        "--representative-selection",
+        "global_best"
+      ]
+    },
+    "crowding": {
+      "label": "真实 NSGA-II 拥挤距离的环境选择",
+      "arguments": [
+        "--iemoeo-survival",
+        "rank_crowding"
+      ]
+    },
+    "shared_crowding": {
+      "label": "共享交配加真实拥挤距离",
+      "arguments": [
+        "--no-isolation",
+        "--iemoeo-survival",
+        "rank_crowding"
+      ]
+    },
+    "no_combination": {
+      "label": "关闭全局组合，名义组合 FE 转给局部搜索",
+      "arguments": [
+        "--combination-method",
+        "none"
+      ]
+    },
+    "shared_no_combination": {
+      "label": "共享交配并关闭全局组合，预算转给局部搜索",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "none"
+      ]
+    }
+  },
+  "suites": {
+    "core": [
+      "full",
+      "shared",
+      "rank",
+      "shared_rank",
+      "unchecked",
+      "sbx",
+      "random_coord",
+      "shared_sbx"
+    ],
+    "sensitivity": [
+      "full",
+      "radius_005",
+      "radius_02",
+      "radius_10",
+      "local_3",
+      "local_5",
+      "uniform_2",
+      "known_2",
+      "representatives_only"
+    ],
+    "parents": [
+      "full",
+      "unchecked",
+      "local_random",
+      "global_best",
+      "radius_10"
+    ],
+    "crowding": [
+      "full",
+      "shared",
+      "rank",
+      "shared_rank",
+      "crowding",
+      "shared_crowding"
+    ],
+    "combination": [
+      "full",
+      "shared",
+      "sbx",
+      "random_coord",
+      "shared_sbx",
+      "no_combination",
+      "shared_no_combination"
+    ],
+    "attribution": [
+      "full",
+      "shared",
+      "rank",
+      "shared_rank",
+      "unchecked",
+      "sbx",
+      "random_coord",
+      "shared_sbx",
+      "local_random",
+      "global_best",
+      "radius_10",
+      "crowding",
+      "shared_crowding",
+      "no_combination",
+      "shared_no_combination"
+    ]
+  },
+  "contrasts": [
+    {
+      "id": "isolation_with_reference",
+      "target": "full",
+      "control": "shared",
+      "claim": "独立交配的贡献"
+    },
+    {
+      "id": "isolation_without_reference",
+      "target": "rank",
+      "control": "shared_rank",
+      "claim": "没有参考方向维护时的独立交配贡献"
+    },
+    {
+      "id": "reference_maintenance",
+      "target": "full",
+      "control": "rank",
+      "claim": "是否仍依赖显式多样性维护"
+    },
+    {
+      "id": "neighborhood_check",
+      "target": "full",
+      "control": "unchecked",
+      "claim": "邻域代表资格检查的贡献，不等同整个亲本选择原理"
+    },
+    {
+      "id": "blocks_vs_sbx",
+      "target": "full",
+      "control": "sbx",
+      "claim": "结构化组合相对 SBX 的贡献"
+    },
+    {
+      "id": "blocks_vs_coordinates",
+      "target": "full",
+      "control": "random_coord",
+      "claim": "整块继承相对逐坐标继承的贡献"
+    },
+    {
+      "id": "blocks_without_isolation",
+      "target": "shared",
+      "control": "shared_sbx",
+      "claim": "共享交配下结构化组合的贡献"
+    },
+    {
+      "id": "isolation_with_sbx",
+      "target": "sbx",
+      "control": "shared_sbx",
+      "claim": "没有结构化组合时的独立交配贡献"
+    },
+    {
+      "id": "radius_005",
+      "target": "radius_005",
+      "control": "full",
+      "claim": "半径敏感性"
+    },
+    {
+      "id": "radius_02",
+      "target": "radius_02",
+      "control": "full",
+      "claim": "半径敏感性"
+    },
+    {
+      "id": "radius_10",
+      "target": "radius_10",
+      "control": "full",
+      "claim": "半径敏感性与激活诊断"
+    },
+    {
+      "id": "local_3",
+      "target": "local_3",
+      "control": "full",
+      "claim": "局部代数敏感性，包含 FE 分配中介效应"
+    },
+    {
+      "id": "local_5",
+      "target": "local_5",
+      "control": "full",
+      "claim": "局部代数敏感性，包含 FE 分配中介效应"
+    },
+    {
+      "id": "uniform_block_count",
+      "target": "uniform_2",
+      "control": "full",
+      "claim": "块数敏感性"
+    },
+    {
+      "id": "known_blocks",
+      "target": "known_2",
+      "control": "uniform_2",
+      "claim": "相同块数下标准位置/距离分组的贡献"
+    },
+    {
+      "id": "candidate_pool",
+      "target": "full",
+      "control": "representatives_only",
+      "claim": "保留非代表局部个体的工程贡献"
+    },
+    {
+      "id": "local_best_vs_random",
+      "target": "full",
+      "control": "local_random",
+      "claim": "每岛最佳代表相对随机代表的贡献"
+    },
+    {
+      "id": "island_vs_global_representatives",
+      "target": "full",
+      "control": "global_best",
+      "claim": "按岛保留局部最佳相对联合池标量最佳的贡献"
+    },
+    {
+      "id": "crowding_vs_random_truncation",
+      "target": "crowding",
+      "control": "rank",
+      "claim": "隔离状态下真实拥挤距离相对随机末层截断"
+    },
+    {
+      "id": "shared_crowding_vs_random",
+      "target": "shared_crowding",
+      "control": "shared_rank",
+      "claim": "共享交配下真实拥挤距离相对随机截断"
+    },
+    {
+      "id": "isolation_with_crowding",
+      "target": "crowding",
+      "control": "shared_crowding",
+      "claim": "使用真实拥挤距离时的隔离贡献"
+    },
+    {
+      "id": "reference_vs_crowding",
+      "target": "full",
+      "control": "crowding",
+      "claim": "同一核心的参考方向维护与真实拥挤距离比较"
+    },
+    {
+      "id": "shared_reference_vs_crowding",
+      "target": "shared",
+      "control": "shared_crowding",
+      "claim": "共享交配下参考方向与拥挤距离比较"
+    },
+    {
+      "id": "combination_vs_local_budget",
+      "target": "full",
+      "control": "no_combination",
+      "claim": "全局组合相对把名义组合预算转给局部搜索的策略贡献"
+    },
+    {
+      "id": "shared_combination_vs_local_budget",
+      "target": "shared",
+      "control": "shared_no_combination",
+      "claim": "共享交配下全局组合相对局部预算转移"
+    },
+    {
+      "id": "isolation_without_global_combination",
+      "target": "no_combination",
+      "control": "shared_no_combination",
+      "claim": "无显式全局组合时的隔离贡献"
+    }
+  ],
+  "interactions": [
+    {
+      "id": "isolation_x_reference",
+      "cells": [
+        "full",
+        "shared",
+        "rank",
+        "shared_rank"
+      ]
+    },
+    {
+      "id": "isolation_x_blocks",
+      "cells": [
+        "full",
+        "shared",
+        "sbx",
+        "shared_sbx"
+      ]
+    },
+    {
+      "id": "isolation_x_true_crowding",
+      "cells": [
+        "crowding",
+        "shared_crowding",
+        "rank",
+        "shared_rank"
+      ]
+    },
+    {
+      "id": "isolation_x_combination_presence",
+      "cells": [
+        "full",
+        "shared",
+        "no_combination",
+        "shared_no_combination"
+      ]
+    }
+  ],
+  "stages": {
+    "smoke": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3",
+      "seeds": "1",
+      "evals_per_pop": 20,
+      "timing_only": false
+    },
+    "pilot": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg3",
+        "wfg6",
+        "wfg9"
+      ],
+      "objectives": "3,4,10",
+      "seeds": "1-5",
+      "evals_per_pop": 200,
+      "timing_only": false
+    },
+    "confirm": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg3",
+        "wfg6",
+        "wfg9"
+      ],
+      "objectives": "3,4,10",
+      "seeds": "31-60",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "many_objective": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg3",
+        "wfg6",
+        "wfg9"
+      ],
+      "objectives": "5,8,15",
+      "seeds": "31-60",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "timing": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3,10",
+      "seeds": "31-35",
+      "evals_per_pop": 200,
+      "timing_only": true
+    }
+  },
+  "pending_controls": [
+    {
+      "id": "island_parallelism",
+      "required_for": "岛内并行效率更高",
+      "reason": "--workers 仅并行独立实验任务，不是岛内并行；需固定硬件和 FE 的 1/2/4/8 核加速及通信开销实验"
+    },
+    {
+      "id": "network_drl",
+      "required_for": "网络调度与 DRL 协同的应用优势",
+      "reason": "标准连续函数不能替代有约束网络场景、动态扰动和 DRL 联合消融"
+    },
+    {
+      "id": "extremum_certificate",
+      "required_for": "数学局部极值或驻点主张",
+      "reason": "局部标量最佳与有限代表间支配筛选不是数学认证"
+    }
+  ],
+  "common_arguments": [
+    "--iemoeo-selection-audit"
+  ],
+  "implemented_controls": [
+    {
+      "id": "local_representative_selection",
+      "required_for": "局部竞争所得亲本优于随机或全局高适应度亲本",
+      "reason": "目前 --no-parent-check 只移除邻域资格检查，未移除局部最佳代表选择；需等 FE 的岛内随机代表和全局标量最佳代表控制",
+      "status": "implemented_not_confirmed"
+    },
+    {
+      "id": "true_crowding_control",
+      "required_for": "独立进化可替代拥挤距离",
+      "reason": "当前 rank 对照是随机截断而非拥挤距离；需隔离开关×真实 rank-and-crowding 的同一核心控制，并追踪目标近似但决策远离的个体",
+      "status": "implemented_not_confirmed"
+    },
+    {
+      "id": "no_combination_equal_budget",
+      "required_for": "跨岛组合本身优于无组合",
+      "reason": "SBX 仍是跨亲本重组；需关闭组合并明确把相同 FE 重新分配到局部进化的策略",
+      "status": "implemented_not_confirmed"
+    }
+  ],
+  "budget_policy": {
+    "none": "每轮用 min(亲本索引对数,组合上限,剩余FE) 作为名义额度，转给原交配规则的局部搜索并逐次限制新评价数；完整版本缓存命中可能使实际组合FE低于名义额度。总FE相同，不宣称各阶段实际FE精确相同。"
+  },
+  "selection_audit_policy": {
+    "objective_rms_threshold": 0.02,
+    "decision_rms_threshold": 0.2,
+    "max_pairs_per_round": 1024,
+    "interpretation": "固定独立随机流抽样的候选对保留描述；不能把未保留自动视为错杀，也不能代替性能证据。"
+  }
+}

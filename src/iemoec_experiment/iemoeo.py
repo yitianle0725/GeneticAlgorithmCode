@@ -13,10 +13,12 @@ from pymoo.algorithms.moo.nsga3 import ReferenceDirectionSurvival
 from pymoo.core.evaluator import Evaluator
 from pymoo.core.individual import Individual
 from pymoo.core.population import Population
+from pymoo.operators.survival.rank_and_crowding import RankAndCrowding
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
 from .factory import make_operators, reference_directions
 from .initialization import shared_initial_decisions
+from .iemoeo_diagnostics import selection_pair_audit
 from .normalization import ObjectiveNormalization
 from .problems import standard_problem_dimensions
 
@@ -127,7 +129,7 @@ class IEMOEORunner:
                 seen.add(key)
         return population[np.asarray(selected, dtype=int)]
 
-    def _evaluate(self, X) -> Population:
+    def _evaluate(self, X, evaluation_limit: int | None = None) -> Population:
         """按批次评价新决策；缓存命中保留候选但不重复扣 FE。"""
         values = np.asarray(X, dtype=float)
         if not values.size:
@@ -139,10 +141,11 @@ class IEMOEORunner:
             raise ValueError("修复后的决策必须是有限、维数正确且不越界的矩阵")
         keys = []
         pending = {}
+        available = self.remaining if evaluation_limit is None else min(self.remaining, evaluation_limit)
         for x in values:
             key = self._key(x)
             if key not in self.evaluation_cache and key not in pending:
-                if len(pending) >= self.remaining:
+                if len(pending) >= available:
                     break
                 pending[key] = x
             keys.append(key)
@@ -179,7 +182,7 @@ class IEMOEORunner:
             raise RuntimeError("局部竞争前必须建立目标归一化上下文")
         return context.apply(population.get("F")) @ self.weights
 
-    def _local_generation(self, islands) -> tuple[list[Population], int]:
+    def _local_generation(self, islands, evaluation_limit: int | None = None) -> tuple[list[Population], int]:
         """同步产生一代后代；隔离关闭时，各小群体使用同一全局交配池。"""
         shared = merge_populations(islands)
         children_X = []
@@ -209,7 +212,7 @@ class IEMOEORunner:
         # 交错各岛的后代，预算不足时仍按同一顺序截断整个评价批次。
         active = [i for i, size in enumerate(sizes) if size]
         X = np.stack(children_X, axis=1).reshape(-1, self.problem.n_var)
-        offspring = self._evaluate(X)
+        offspring = self._evaluate(X, evaluation_limit)
         updated = list(islands)
         for position, i in enumerate(active):
             merged = Population.merge(islands[i], offspring[position::len(active)])
@@ -221,13 +224,38 @@ class IEMOEORunner:
         return updated, foreign_parent_count
 
     def _representatives(self, islands) -> Population:
+        if self.config.representative_selection == "global_best":
+            members = []
+            for island_id, island in enumerate(islands):
+                for individual in island:
+                    member = individual.copy()
+                    member.set("source_island", island_id)
+                    members.append(member)
+            if not members:
+                return Population.empty()
+            # 联合池可能含有同一缓存决策的多个副本，不能让克隆占用最佳代表名额。
+            pool = self._unique(Population.create(*members))
+            count = sum(bool(len(island)) for island in islands)
+            if len(pool) < count and self.remaining:
+                raise RuntimeError("联合池独特决策不足，无法构造相同数量的全局最佳代表")
+            context = self.normalization
+            if self.config.normalization_mode == "legacy":
+                context = ObjectiveNormalization.from_objectives(pool.get("F"))
+            order = np.argsort(self._scores(pool, context), kind="stable")
+            return pool[order[:count]]
         best = []
-        for island in islands:
+        for island_id, island in enumerate(islands):
             if len(island):
                 context = self.normalization
                 if self.config.normalization_mode == "legacy":
                     context = ObjectiveNormalization.from_objectives(island.get("F"))
-                best.append(island[int(np.argmin(self._scores(island, context)))].copy())
+                if self.config.representative_selection == "local_random":
+                    index = int(self.rng.integers(len(island)))
+                else:
+                    index = int(np.argmin(self._scores(island, context)))
+                representative = island[index].copy()
+                representative.set("source_island", island_id)
+                best.append(representative)
         return Population.create(*best)
 
     def _qualify(self, representatives) -> np.ndarray:
@@ -264,6 +292,16 @@ class IEMOEORunner:
                 break
         return eligible[np.asarray(chosen[:self.config.parent_pool_limit], dtype=int)]
 
+    def _parent_pool_audit(self, representatives, selected) -> dict:
+        unchecked = self._parent_pool(representatives)
+        unchecked_keys = {self._key(ind.X) for ind in unchecked}
+        selected_keys = {self._key(ind.X) for ind in selected}
+        return {
+            "parent_pool_changed_by_check": unchecked_keys != selected_keys,
+            "parent_pool_unique_count": len(selected_keys),
+            "unchecked_parent_pool_unique_count": len(unchecked_keys),
+        }
+
     def _inherit(self, a, b, structured: bool) -> np.ndarray:
         blocks = self.blocks if structured else [np.array([i]) for i in range(self.problem.n_var)]
         selected = self.rng.integers(0, 2, len(blocks)).astype(bool)
@@ -280,11 +318,29 @@ class IEMOEORunner:
     def combination_method(self) -> str:
         return self.config.combination_method if self.config.block_combination else "sbx_only"
 
+    def _combination_budget(self, parents) -> int:
+        pair_count = len(parents) * (len(parents) - 1) // 2
+        return min(self.config.combination_pairs_limit, pair_count, self.remaining)
+
+    def _redirect_combination_budget(self, islands, quota: int):
+        """关闭全局组合时，在原交配规则内补做局部搜索，严格限制新增 FE。"""
+        start = self.n_eval
+        foreign_parents = calls = stalled = 0
+        while self.n_eval - start < quota and self.remaining:
+            before = self.n_eval
+            islands, count = self._local_generation(islands, quota - (self.n_eval - start))
+            foreign_parents += count
+            calls += 1
+            stalled = stalled + 1 if self.n_eval == before else 0
+            if stalled >= 20:
+                raise RuntimeError("组合预算转移连续 20 次未产生新决策，不能虚构 FE")
+        return islands, foreign_parents, calls
+
     def _combine(self, parents) -> Population:
-        if len(parents) < 2 or not self.remaining:
+        if self.combination_method == "none" or len(parents) < 2 or not self.remaining:
             return Population.empty()
         possible = list(combinations(range(len(parents)), 2))
-        count = min(self.config.combination_pairs_limit, len(possible), self.remaining)
+        count = self._combination_budget(parents)
         indices = self.rng.choice(len(possible), size=count, replace=False)
         pairs = np.asarray([possible[i] for i in indices], dtype=int)
         if self.combination_method == "sbx_only":
@@ -309,6 +365,10 @@ class IEMOEORunner:
         size = min(self.n_origin, len(candidates))
         if self.config.diversity_maintenance and self.config.outer_survival == "nsga3":
             return ReferenceDirectionSurvival(self.ref_dirs).do(
+                self.problem, candidates, n_survive=size, random_state=self.rng,
+            )
+        if self.config.diversity_maintenance and self.config.outer_survival == "rank_crowding":
+            return RankAndCrowding(crowding_func="cd").do(
                 self.problem, candidates, n_survive=size, random_state=self.rng,
             )
         chosen = []
@@ -359,7 +419,21 @@ class IEMOEORunner:
             representatives = self._representatives(islands)
             eligible, qualified_count, fallback = self._eligible_parents(representatives)
             parents = self._parent_pool(eligible)
-            offspring = self._combine(parents)
+            combination_budget = self._combination_budget(parents)
+            redirected_fes = extra_local_calls = 0
+            if self.combination_method == "none":
+                before = self.n_eval
+                islands, count, extra_local_calls = self._redirect_combination_budget(islands, combination_budget)
+                foreign_parents += count
+                redirected_fes = self.n_eval - before
+                local_end = self.n_eval
+                if redirected_fes:
+                    representatives = self._representatives(islands)
+                    eligible, qualified_count, fallback = self._eligible_parents(representatives)
+                    parents = self._parent_pool(eligible)
+                offspring = Population.empty()
+            else:
+                offspring = self._combine(parents)
             candidates = merge_populations(
                 [*islands, eligible, offspring] if self.config.elitist_pool else [eligible, offspring]
             )
@@ -379,6 +453,7 @@ class IEMOEORunner:
                 "merge_fes": 0,
                 "founder_count": len(islands),
                 "representative_count": len(representatives),
+                "representative_slots_requested": sum(bool(len(island)) for island in islands),
                 "qualified_parent_count": qualified_count,
                 "parent_acceptance_rate": qualified_count / len(islands),
                 "eligible_parent_count": len(eligible),
@@ -389,7 +464,21 @@ class IEMOEORunner:
                 "origin_population_size": len(self.founders),
                 "front_size": len(self.candidate_pool),
                 "budget_exhausted": self.remaining == 0,
+                "representative_selection": self.config.representative_selection,
+                "representative_source_islands": len(set(representatives.get("source_island"))),
+                "unique_representative_count": len({self._key(ind.X) for ind in representatives}),
+                "combination_method": self.combination_method,
+                "combination_budget_requested": combination_budget,
+                "combination_reallocated_fes": redirected_fes,
+                "extra_local_generation_calls": extra_local_calls,
+                "survival_method": self.config.outer_survival if self.config.diversity_maintenance else "rank",
             }
+            if self.config.selection_audit:
+                record.update(self._parent_pool_audit(representatives, parents))
+                record.update(selection_pair_audit(
+                    self.problem, candidates, self.founders,
+                    20261102 + self.case.seed + self.global_selection_count,
+                ))
             if self.on_outer_selection is not None:
                 values = self.on_outer_selection(self.n_eval, self.candidate_pool)
                 if values:

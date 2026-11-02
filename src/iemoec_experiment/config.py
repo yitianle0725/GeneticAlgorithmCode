@@ -477,6 +477,8 @@ class IEMOEOConfig:
     block_combination: bool = True
     diversity_maintenance: bool = True
     elitist_pool: bool = True
+    representative_selection: str = "local_best"
+    selection_audit: bool = False
 
     def validate(self, n_obj: int) -> None:
         if not 0 < self.origin_ratio <= 1:
@@ -500,10 +502,14 @@ class IEMOEOConfig:
             raise ValueError("IE-MOEO normalization_mode 仅支持 global 或 legacy")
         if self.block_mode not in ("uniform", "known_separable"):
             raise ValueError("IE-MOEO block_mode 仅支持 uniform 或 known_separable")
-        if self.combination_method not in ("structured", "random_coord", "sbx_only"):
+        if self.combination_method not in ("structured", "random_coord", "sbx_only", "none"):
             raise ValueError("IE-MOEO combination_method 不受支持")
-        if self.use_crowding or self.outer_survival not in ("nsga3", "rank"):
-            raise ValueError("IE-MOEO 只支持 nsga3/rank 环境选择，禁止拥挤距离")
+        if self.use_crowding or self.outer_survival not in ("nsga3", "rank", "rank_crowding"):
+            raise ValueError("IE-MOEO 环境选择应使用 nsga3/rank/rank_crowding，不能使用旧 use_crowding 开关")
+        if self.representative_selection not in ("local_best", "local_random", "global_best"):
+            raise ValueError("不支持的 IE-MOEO 代表选择策略")
+        if self.combination_method == "none" and not self.block_combination:
+            raise ValueError("none 与 --no-block-combination 不能同时使用，后者会改为 SBX")
         if self.objective_weights is not None:
             weights = self.objective_weights
             if (len(weights) != n_obj
@@ -587,7 +593,7 @@ class ExperimentCase:
     @property
     def algorithm_schema_version(self) -> int:
         if self.normalized_algorithm == "IEMOEO":
-            return 1
+            return 2
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.algorithm_schema_version
         if self.normalized_algorithm == "AGEMOEA2STABLE":

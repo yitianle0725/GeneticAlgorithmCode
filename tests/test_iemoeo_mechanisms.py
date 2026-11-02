@@ -14,7 +14,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 
 from analyze_iemoeo_pilot import descriptive_comparisons
 from run_iemoeo_mechanisms import DEFAULT_PLAN, build_commands, write_schedule
-from summarize_iemoeo_mechanisms import apply_global_holm, interaction_rows, paired_log_ratio
+from summarize_iemoeo_mechanisms import apply_global_holm, evidence_scope, interaction_rows, paired_log_ratio
 
 
 class MechanismPlanTests(unittest.TestCase):
@@ -56,6 +56,8 @@ class MechanismPlanTests(unittest.TestCase):
     def test_timing_cannot_use_multiple_workers(self):
         with self.assertRaisesRegex(ValueError, "workers 1"):
             build_commands(self.plan, "timing", "core", Path("study"), Path("store"), 4)
+        commands = build_commands(self.plan, "timing", "core", Path("study"), Path("store"), 1)
+        self.assertTrue(all(not command["iemoeo_config"]["selection_audit"] for command in commands))
 
     def test_registration_rejects_plan_changes_but_allows_worker_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -74,14 +76,39 @@ class MechanismPlanTests(unittest.TestCase):
                 write_schedule(path, self.plan, "smoke", "core", changed_commands)
 
     def test_unimplemented_controls_are_explicitly_pending(self):
-        pending = {item["id"] for item in self.plan["pending_controls"]}
+        old_plan = json.loads((ROOT / "experiments" / "iemoeo_mechanisms_v1.json").read_text(encoding="utf-8"))
+        pending = {item["id"] for item in old_plan["pending_controls"]}
         self.assertIn("true_crowding_control", pending)
         self.assertIn("local_representative_selection", pending)
         self.assertIn("no_combination_equal_budget", pending)
-        self.assertTrue(pending.isdisjoint(self.plan["variants"]))
+        self.assertTrue(pending.isdisjoint(old_plan["variants"]))
+
+    def test_v2_attribution_has_all_missing_controls(self):
+        commands = build_commands(self.plan, "pilot", "attribution", Path("study"), Path("store"), 4)
+        self.assertEqual(sum(command["tasks"] for command in commands), 1350)
+        configs = {command["variant"]: command["iemoeo_config"] for command in commands}
+        self.assertEqual(configs["local_random"]["representative_selection"], "local_random")
+        self.assertEqual(configs["global_best"]["representative_selection"], "global_best")
+        self.assertEqual(configs["crowding"]["outer_survival"], "rank_crowding")
+        self.assertEqual(configs["no_combination"]["combination_method"], "none")
+        self.assertTrue(all(config["selection_audit"] for config in configs.values()))
+        for item in self.plan["interactions"]:
+            self.assertTrue(all(name in configs for name in item["cells"]))
+
+    def test_combination_suite_includes_complete_factorial_cells(self):
+        names = set(self.plan["suites"]["combination"])
+        for item in self.plan["interactions"]:
+            if item["id"] in ("isolation_x_blocks", "isolation_x_combination_presence"):
+                self.assertTrue(set(item["cells"]) <= names)
 
 
 class MechanismStatisticsTests(unittest.TestCase):
+    def test_smoke_and_timing_cannot_be_labelled_confirmation(self):
+        self.assertEqual(evidence_scope("smoke"), "implementation_only")
+        self.assertEqual(evidence_scope("pilot"), "development")
+        self.assertEqual(evidence_scope("timing"), "timing_diagnostic")
+        self.assertEqual(evidence_scope("confirm"), "confirmation")
+
     def make_arms(self, factors):
         return {name: [{"problem": "dtlz2", "n_obj": 3, "seed": seed,
                         "igd_plus": factor * seed} for seed in range(1, 6)]

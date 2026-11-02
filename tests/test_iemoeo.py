@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+import io
 import sys
 import tempfile
 import unittest
 from dataclasses import replace
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,12 +23,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from iemoec_experiment.config import ExperimentCase, IEMOECConfig, IEMOEOConfig
 from iemoec_experiment.factory import reference_directions
 from iemoec_experiment.iemoeo import IEMOEORunner, variable_blocks
+from iemoec_experiment.iemoeo_diagnostics import selection_pair_audit
 from iemoec_experiment.initialization import initialization_hash, shared_initial_decisions
 from iemoec_experiment.normalization import ObjectiveNormalization
 from iemoec_experiment.problems import make_problem
 from iemoec_experiment.runner import run_case
 from run import build_parser, resolve_cases
 from summarize import paired_tests, win_tie_loss
+from create_manifest import main as create_manifest_main
 
 
 class BoxProblem(Problem):
@@ -53,7 +57,7 @@ class IEMOEOTests(unittest.TestCase):
         case.validate()
         self.assertEqual(len(reference_directions(case)), 84)
         self.assertEqual(case.algorithm_label, "IE-MOEO")
-        self.assertEqual(case.algorithm_schema_version, 1)
+        self.assertEqual(case.algorithm_schema_version, 2)
         self.assertNotIn("iemoec", case.to_dict())
         old = ExperimentCase("IEMOEC", "dtlz2", 3, 1, 182, iemoec=IEMOECConfig.for_variant("s3_elite"))
         self.assertNotIn("iemoeo", old.to_dict())
@@ -66,7 +70,9 @@ class IEMOEOTests(unittest.TestCase):
             {"combination_pairs_limit": -1}, {"block_size": 1},
             {"block_mode": "unknown"}, {"combination_method": "unknown"},
             {"principle_probe_radius": -0.1}, {"principle_probe_radius": float("nan")},
-            {"outer_survival": "rank_crowding"}, {"use_crowding": True},
+            {"outer_survival": "unknown"}, {"use_crowding": True},
+            {"representative_selection": "unknown"},
+            {"combination_method": "none", "block_combination": False},
             {"objective_weights": (0.5, 0.5)}, {"objective_weights": (1.0, 1.0, 1.0)},
         ]
         for changes in invalid:
@@ -76,6 +82,128 @@ class IEMOEOTests(unittest.TestCase):
             ExperimentCase("IEMOEO", "c2dtlz2", 3, 1, 182).validate()
         with self.assertRaises(ValueError):
             self.make_runner(budget=1)
+
+    def test_rebuilding_historical_manifest_preserves_schema1(self):
+        from summarize import load_rows
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "historical"
+            case = ExperimentCase("IEMOEO", "dtlz2", 3, 7, 182, str(root),
+                                  reference_points=30, high_dim_hv_samples=1000)
+            run_case(case)
+            for name in ("config.json", "metrics.json"):
+                path = case.output_dir / name
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["algorithm_schema_version"] = 1
+                if name == "config.json":
+                    data["iemoeo"].pop("representative_selection")
+                    data["iemoeo"].pop("selection_audit")
+                path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            arguments = ["create_manifest.py", str(root), "--problems", "dtlz2", "--objectives", "3",
+                         "--seeds", "7", "--algorithms", "IEMOEO", "--metric-schema-version", "5"]
+            with patch.object(sys, "argv", arguments), redirect_stdout(io.StringIO()):
+                self.assertEqual(create_manifest_main(), 0)
+            rows, validation = load_rows(root)
+            self.assertEqual(rows[0]["algorithm_schema_version"], 1)
+            self.assertEqual(validation["completed"], 1)
+
+    def test_representative_controls_preserve_slots_and_expose_sources(self):
+        islands = [
+            Population.new("X", np.array([[.1] * 4, [.2] * 4]), "F", np.array([[0.] * 3, [1.] * 3])),
+            Population.new("X", np.array([[.3] * 4, [.4] * 4]), "F", np.array([[5.] * 3, [6.] * 3])),
+        ]
+        for mode, expected in (("local_best", [0, 5]), ("global_best", [0, 1])):
+            runner = self.make_runner(representative_selection=mode)
+            runner.normalization = ObjectiveNormalization.from_objectives(np.array([[0.] * 3, [6.] * 3]))
+            representatives = runner._representatives(islands)
+            self.assertEqual(len(representatives), 2)
+            np.testing.assert_array_equal(representatives.get("F")[:, 0], expected)
+            self.assertEqual(runner.n_eval, 0)
+        self.assertEqual(len(set(representatives.get("source_island"))), 1)
+        runner = self.make_runner(representative_selection="local_random")
+        runner.normalization = ObjectiveNormalization.from_objectives(np.array([[0.] * 3, [6.] * 3]))
+        runner.rng = np.random.default_rng(123)
+        representatives = runner._representatives(islands)
+        np.testing.assert_array_equal(representatives.get("F")[:, 0], [0, 6])
+        self.assertEqual(len(set(representatives.get("source_island"))), 2)
+
+    def test_crowding_control_retains_tradeoff_extremes(self):
+        runner = self.make_runner(outer_survival="rank_crowding")
+        candidates = Population.new(
+            "X", np.asarray([[value] * 4 for value in (.1, .2, .3, .4)]),
+            "F", np.asarray([[0, 1, .5], [.3, .7, .5], [.7, .3, .5], [1, 0, .5]]),
+        )
+        selected = runner._select_founders(candidates)
+        self.assertEqual(set(selected.get("F")[:, 0]), {0., 1.})
+        self.assertTrue(np.all(np.isinf(selected.get("crowding"))))
+        self.assertEqual(runner.n_eval, 0)
+
+    def test_global_best_does_not_fill_representative_slots_with_clones(self):
+        runner = self.make_runner(representative_selection="global_best")
+        runner.normalization = ObjectiveNormalization.from_objectives(np.array([[0.] * 3, [2.] * 3]))
+        islands = [
+            Population.new("X", np.array([[.1] * 4, [.2] * 4]), "F", np.array([[0.] * 3, [1.] * 3])),
+            Population.new("X", np.array([[.1] * 4, [.3] * 4]), "F", np.array([[0.] * 3, [2.] * 3])),
+        ]
+        selected = runner._representatives(islands)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(len({runner._key(ind.X) for ind in selected}), 2)
+        np.testing.assert_array_equal(selected.get("F")[:, 0], [0, 1])
+
+    def test_rejecting_parent_need_not_change_rank_limited_parent_pool(self):
+        runner = self.make_runner(principle_probe_radius=10, parent_pool_limit=2)
+        representatives = Population.new("X", np.array([[.1] * 4, [.2] * 4, [.3] * 4]),
+                                         "F", np.array([[0, 3, 3], [3, 0, 3], [4, 4, 4]]))
+        runner.normalization = ObjectiveNormalization.from_objectives(representatives.get("F"))
+        eligible, qualified, _ = runner._eligible_parents(representatives)
+        self.assertEqual(qualified, 2)
+        selected = runner._parent_pool(eligible)
+        audit = runner._parent_pool_audit(representatives, selected)
+        self.assertFalse(audit["parent_pool_changed_by_check"])
+        self.assertEqual(audit["parent_pool_unique_count"], 2)
+
+    def test_no_combination_redirects_budget_and_obeys_tail_budgets(self):
+        for budget in (2, 3, 7, 59, 160, 420):
+            with self.subTest(budget=budget):
+                runner = self.make_runner(budget=budget, combination_method="none")
+                with patch.object(runner, "_combine", side_effect=AssertionError("执行了全局组合")):
+                    runner.run()
+                self.assertEqual(runner.n_eval, budget)
+                self.assertTrue(all(row["recombination_offspring"] == 0 for row in runner.outer_records))
+                self.assertTrue(all(row["combination_reallocated_fes"] == row["combination_budget_requested"]
+                                    for row in runner.outer_records))
+                self.assertEqual(runner.initial_evaluations + sum(row["island_fes"] for row in runner.outer_records), budget)
+                if budget >= 160:
+                    self.assertGreater(sum(row["combination_reallocated_fes"] for row in runner.outer_records), 0)
+
+    def test_reallocated_generation_cannot_overspend_or_fake_evaluations(self):
+        runner = self.make_runner()
+        evaluated = runner._evaluate([[.1] * 4, [.2] * 4, [.3] * 4], evaluation_limit=2)
+        self.assertEqual(len(evaluated), 2)
+        self.assertEqual(runner.n_eval, 2)
+        with patch.object(runner, "_local_generation", return_value=([evaluated], 0)):
+            with self.assertRaisesRegex(RuntimeError, "20 次"):
+                runner._redirect_combination_budget([evaluated], 1)
+        self.assertEqual(runner.n_eval, 2)
+
+    def test_selection_audit_preserves_search_random_stream(self):
+        plain, audited = self.make_runner(), self.make_runner(selection_audit=True)
+        first, _ = plain.run()
+        second, _ = audited.run()
+        np.testing.assert_array_equal(first.get("X"), second.get("X"))
+        np.testing.assert_array_equal(first.get("F"), second.get("F"))
+        self.assertEqual(plain.n_eval, audited.n_eval)
+        self.assertTrue(all("audited_pair_count" in row for row in audited.outer_records))
+
+    def test_selection_audit_counts_near_objectives_far_decisions(self):
+        runner = self.make_runner()
+        candidates = Population.new("X", np.array([runner.problem.xl, runner.problem.xu]),
+                                    "F", np.zeros((2, 3)))
+        result = selection_pair_audit(runner.problem, candidates, candidates[:1], 7)
+        self.assertEqual(result["near_f_far_x_pair_count"], 1)
+        self.assertEqual(result["near_f_far_x_both_retained"], 0)
+        self.assertEqual(result["near_f_far_x_endpoints_retained"], 1)
+        self.assertEqual(runner.n_eval, 0)
 
     def test_tail_budgets_accounting_callbacks_and_repeatability(self):
         for budget in (2, 3, 7, 12, 17, 59, 160):

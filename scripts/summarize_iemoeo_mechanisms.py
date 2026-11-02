@@ -23,6 +23,12 @@ def apply_global_holm(rows: list[dict], field: str = "p_holm") -> None:
         row[field] = adjusted
 
 
+def evidence_scope(stage: str) -> str:
+    if stage in ("confirm", "many_objective"):
+        return "confirmation"
+    return {"smoke": "implementation_only", "pilot": "development", "timing": "timing_diagnostic"}[stage]
+
+
 def paired_log_ratio(target: np.ndarray, control: np.ndarray) -> np.ndarray:
     """对数尺度降低不同问题数值量纲的影响；零值下限事先固定。"""
     return np.log(np.maximum(target, 1e-12)) - np.log(np.maximum(control, 1e-12))
@@ -77,6 +83,34 @@ def interaction_rows(arms: dict[str, list[dict]], interactions: list[dict]) -> l
     return reports
 
 
+def diagnostic_summary(name: str, rows: list[dict], rounds: list[dict]) -> dict:
+    def total(field: str) -> int:
+        return sum(int(row.get(field) or 0) for row in rounds)
+
+    budget = sum(row["n_eval"] for row in rows)
+    return {
+        "variant": name, "runs": len(rows), "rounds": len(rounds),
+        "rounds_rejecting_parents": sum(int(r["qualified_parent_count"]) < int(r["representative_count"]) for r in rounds),
+        "rounds_with_foreign_parents": sum(int(r["foreign_parent_count"]) > 0 for r in rounds),
+        "fallback_rounds": sum(r["parent_fallback"] == "True" for r in rounds),
+        "combination_fe_fraction": sum(r["evaluation_breakdown"]["combination"] for r in rows) / budget,
+        "expansion_fe_fraction": sum(r["evaluation_breakdown"]["initial_expansion"] + r["evaluation_breakdown"]["later_expansions"] for r in rows) / budget,
+        "combination_reallocated_fes": total("combination_reallocated_fes"),
+        "combination_budget_requested": total("combination_budget_requested"),
+        "extra_local_generation_calls": total("extra_local_generation_calls"),
+        "audited_pair_count": total("audited_pair_count"),
+        "near_f_far_x_pair_count": total("near_f_far_x_pair_count"),
+        "near_f_far_x_both_retained": total("near_f_far_x_both_retained"),
+        "near_f_far_x_endpoints_retained": total("near_f_far_x_endpoints_retained"),
+        "crowding_rounds": sum(r.get("survival_method") == "rank_crowding" for r in rounds),
+        "representative_slots": total("representative_count"),
+        "unique_representative_slots": total("unique_representative_count"),
+        "representative_island_slots": total("representative_source_islands"),
+        "schema2_diagnostics_available": all("representative_selection" in r for r in rounds),
+        "rounds_check_changed_parent_pool": sum(r.get("parent_pool_changed_by_check") == "True" for r in rounds),
+    }
+
+
 def summarize_study(root: Path) -> dict:
     schedule = json.loads((root / "schedule.json").read_text(encoding="utf-8"))
     plan = schedule["plan"]
@@ -112,15 +146,7 @@ def summarize_study(root: Path) -> dict:
         for path in result_files(arm_root, "iemoeo_diagnostics.csv"):
             with path.open(encoding="utf-8-sig", newline="") as handle:
                 rounds.extend(csv.DictReader(handle))
-        budget = sum(row["n_eval"] for row in rows)
-        activation.append({
-            "variant": name, "runs": len(rows), "rounds": len(rounds),
-            "rounds_rejecting_parents": sum(int(r["qualified_parent_count"]) < int(r["representative_count"]) for r in rounds),
-            "rounds_with_foreign_parents": sum(int(r["foreign_parent_count"]) > 0 for r in rounds),
-            "fallback_rounds": sum(r["parent_fallback"] == "True" for r in rounds),
-            "combination_fe_fraction": sum(r["evaluation_breakdown"]["combination"] for r in rows) / budget,
-            "expansion_fe_fraction": sum(r["evaluation_breakdown"]["initial_expansion"] + r["evaluation_breakdown"]["later_expansions"] for r in rows) / budget,
-        })
+        activation.append(diagnostic_summary(name, rows, rounds))
 
     tests = []
     for contrast in plan["contrasts"]:
@@ -135,6 +161,9 @@ def summarize_study(root: Path) -> dict:
         for row in current:
             row["contrast"] = contrast["id"]
             row["claim"] = contrast["claim"]
+            row["evidence_scope"] = evidence_scope(schedule["stage"])
+            if row["n_pairs"] == 1:
+                row["a12_magnitude"] = "not_interpreted_single_seed"
             target_group = scene_by_seed(arms[target], row["problem"], row["n_obj"])
             control_group = scene_by_seed(arms[control], row["problem"], row["n_obj"])
             seeds = sorted(target_group)
@@ -170,6 +199,7 @@ def summarize_study(root: Path) -> dict:
         "interpretation": "smoke/pilot 仅用于实现和开发诊断，不能宣称机制已获确认" if schedule["stage"] in ("smoke", "pilot")
                           else "按登记检验解释，报告正面、负面与不确定结果；不可将不显著当成等效",
         "secondary_metrics": "方向覆盖、决策多样性、GD+ 和解集大小只作描述；输出大小不等时需等基数补充分析",
+        "performance_contribution_verified": None if evidence_scope(schedule["stage"]) == "confirmation" else False,
     }
     (output / "validation.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
@@ -177,7 +207,7 @@ def summarize_study(root: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("study", type=Path, help="例如 results/iemoeo_mechanisms_v1/pilot/core")
+    parser.add_argument("study", type=Path, help="例如 results/iemoeo_mechanisms_v2/pilot/attribution，兼容旧版登记")
     args = parser.parse_args()
     summary = summarize_study(args.study)
     print(f"已汇总 {summary['completed']} 个机制任务：{args.study / 'mechanism_summary'}")

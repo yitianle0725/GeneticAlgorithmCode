@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from iemoec_experiment.config import ExperimentCase, IEMOECConfig, IEMOEOConfig  # noqa: E402
-from iemoec_experiment.manifest import build_manifest, result_files, task_key, write_manifest  # noqa: E402
+from iemoec_experiment.manifest import TASK_FIELDS, build_manifest, result_files, task_key, write_manifest  # noqa: E402
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -57,7 +58,12 @@ def main() -> int:
         if (args.results / "experiment_manifest.json").exists()
         else args.results.rglob("config.json")
     )
+    config_paths = list(config_paths)
     cases = [load_case(path, args.results) for path in config_paths]
+    recorded = {}
+    for path in config_paths:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        recorded[task_key(data)] = (path.parent, data)
     by_key = {task_key(case.to_dict()): case for case in cases}
     if len(by_key) != len(cases):
         raise SystemExit("configuration directory contains duplicate task keys")
@@ -79,6 +85,17 @@ def main() -> int:
         args.metric_schema_version,
     )
     manifest["run_name"] = args.results.name
+    # 补历史清单时保留当时的 schema 和共享地址，不能用当前类把 schema 1 重标成 schema 2。
+    for task in manifest["tasks"]:
+        directory, saved = recorded[task_key(task)]
+        for field in TASK_FIELDS[4:]:
+            if field in saved:
+                task[field] = saved[field]
+        identity_path = directory / "storage_identity.json"
+        if identity_path.exists():
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+            task["result_path"] = os.path.relpath(directory, args.results)
+            task["result_identity"] = identity["identity"]
     write_manifest(args.results / "experiment_manifest.json", manifest)
     print(f"wrote manifest for {len(expected_keys)} tasks: {args.results}")
     return 0
