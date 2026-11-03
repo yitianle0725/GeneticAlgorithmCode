@@ -614,6 +614,22 @@ python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v3/pilot
 汇总新增 `contrast_overview.csv` 和 `interaction_overview.csv`，分别列出数值方向与显著结果；
 `=` 只表示没有检出显著差异，不表示等效。不要把分套件结果中最有利的 p 值当作完整 attribution 校正。
 
+实验中断或个别任务失败后，按原方案只补未完成项：
+
+```powershell
+python scripts/run_iemoeo_mechanisms.py --stage pilot --suite attribution --workers 4 --retry-incomplete --execute
+python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v3/pilot/attribution
+```
+
+`--retry-incomplete` 保留完整冻结清单，只启动不完整的机制组；其内部通过统一入口的
+`--only-incomplete` 只向工作进程提交未完成任务，不重算已完成 seed，不使用 `--force`。
+汇总仍要求全部结果完整；缺失时列出组名、函数、M 和 seed，并以非零状态退出。
+
+结果库使用操作系统文件锁，进程异常退出后锁自动释放；有本协议身份的遗留锁目录可安全接管。
+旁边的 `*.writer.lock` 是永久互斥文件，不要手工删除。旧版本没有身份的空 `.lock` 目录不会被
+按年龄自动清理；必须先确认旧实验进程已经退出，再清理对应遗留目录，保留结果文件。
+持久化与续跑修复不改变算法、预算、schema 或科学配置，原机制结果和成熟算法缓存继续复用。
+
 schema 2 新增代表选择、真实拥挤距离和无全局组合控制。none 将每轮
 `min(亲本索引对数, combination_pairs_limit, 剩余FE)` 作为名义额度，转给原交配规则的局部搜索，
 不增加总 FE、不虚构缓存命中费用；完整版本的实际组合 FE 可能因重复候选而低于名义额度。

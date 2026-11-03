@@ -29,7 +29,7 @@ from iemoec_experiment.metrics import (  # noqa: E402
 )
 from iemoec_experiment.problems import make_problem  # noqa: E402
 from iemoec_experiment.runner import run_case  # noqa: E402
-from iemoec_experiment.result_store import legacy_result_candidates  # noqa: E402
+from iemoec_experiment.result_store import legacy_result_candidates, stored_result_complete  # noqa: E402
 from iemoec_experiment.manifest import result_files, task_key  # noqa: E402
 
 
@@ -319,6 +319,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-diversity-maintenance", action="store_true")
     parser.add_argument("--no-elitist-pool", action="store_true")
     parser.add_argument("--verbose-fe", action="store_true", help="输出 IE-MOEO 每轮的评价次数分账")
+    parser.add_argument("--only-incomplete", action="store_true", help="仅向工作进程提交未完成任务，已完成结果直接复用")
     return parser
 
 
@@ -526,6 +527,9 @@ def ensure_metric_schema_isolated(cases: list[ExperimentCase]) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.only_incomplete and args.force:
+        print("配置错误: --only-incomplete 不能与 --force 同时使用", file=sys.stderr)
+        return 2
     try:
         cases = resolve_cases(args)
         ensure_metric_schema_isolated(cases)
@@ -556,17 +560,23 @@ def main() -> int:
 
     failures = []
     completed = skipped = 0
+    pending = cases
+    if args.only_incomplete:
+        pending = [case for case in cases if not stored_result_complete(case)]
+        skipped = len(cases) - len(pending)
+        print(f"续跑：复用 {skipped} 项，仅提交 {len(pending)} 项未完成任务", flush=True)
+    progress_offset = skipped
     legacy = legacy_result_candidates(Path(args.output_root), cases) if not args.force else {}
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = {
             executor.submit(
                 run_case, case, args.force, args.verbose_fe,
                 legacy.get(task_key(case.to_dict()), ()),
-            ): case for case in cases
+            ): case for case in pending
         }
         for index, future in enumerate(as_completed(futures), start=1):
             case = futures[future]
-            progress = f"[{index}/{len(cases)}]"
+            progress = f"[{progress_offset + index}/{len(cases)}]"
             label = f"{case.normalized_problem.upper()} M{case.n_obj} {case.normalized_algorithm} seed={case.seed}"
             try:
                 result = future.result()

@@ -20,6 +20,7 @@ from iemoec_experiment.result_store import (
     stored_result_complete,
 )
 from iemoec_experiment.runner import run_case
+from iemoec_experiment.result_lock import result_lock
 from plot_results import validate_dataset
 from summarize import load_rows
 
@@ -127,6 +128,44 @@ class ResultStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "锁目录"):
             run_case(self.case)
 
+    def test_os_lock_blocks_a_second_writer_and_releases_on_normal_exit(self):
+        with result_lock(self.case.output_dir):
+            with self.assertRaisesRegex(RuntimeError, "正在写入"):
+                run_case(self.case)
+        self.assertEqual(run_case(self.case)["status"], "completed")
+        self.assertFalse(self.case.output_dir.with_name(self.case.output_dir.name + ".lock").exists())
+
+    def test_killed_writer_lock_is_recovered_without_deleting_result(self):
+        script = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from iemoec_experiment.result_lock import result_lock\n"
+            "directory = Path(sys.argv[2])\n"
+            "with result_lock(directory):\n"
+            "    directory.mkdir()\n"
+            "    (directory / 'partial.txt').write_text('keep', encoding='utf-8')\n"
+            "    print('locked', flush=True)\n"
+            "    sys.stdin.readline()\n"
+        )
+        process = subprocess.Popen([sys.executable, "-c", script, str(ROOT / "src"),
+                                    str(self.case.output_dir)], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "locked")
+            with self.assertRaisesRegex(RuntimeError, "正在写入"):
+                run_case(self.case)
+            process.kill()
+            process.wait(timeout=10)
+            self.assertTrue(self.case.output_dir.with_name(self.case.output_dir.name + ".lock").exists())
+            with result_lock(self.case.output_dir):
+                self.assertEqual((self.case.output_dir / "partial.txt").read_text(encoding="utf-8"), "keep")
+            self.assertEqual(run_case(self.case)["status"], "completed")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+
     def test_manifests_summaries_and_plots_resolve_shared_results(self):
         run_case(self.case)
         self.write_manifest([self.case])
@@ -175,6 +214,13 @@ class ResultStoreTests(unittest.TestCase):
                                 encoding="utf-8", env=environment)
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("[1/1][跳过]", second.stdout)
+        third = subprocess.run(command + ["--run-name", "cli_second", "--only-incomplete"],
+                               capture_output=True, encoding="utf-8", env=environment)
+        self.assertEqual(third.returncode, 0, third.stderr)
+        self.assertIn("仅提交 0 项未完成任务", third.stdout)
+        conflict = subprocess.run(command + ["--only-incomplete", "--force"],
+                                  capture_output=True, encoding="utf-8", env=environment)
+        self.assertEqual(conflict.returncode, 2)
 
 
 if __name__ == "__main__":

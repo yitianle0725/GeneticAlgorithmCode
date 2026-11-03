@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -13,10 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 
 from analyze_iemoeo_pilot import descriptive_comparisons
-from run_iemoeo_mechanisms import DEFAULT_PLAN, build_commands, write_schedule
+from run_iemoeo_mechanisms import DEFAULT_PLAN, build_commands, incomplete_commands, write_schedule
 from summarize_iemoeo_mechanisms import (
     apply_global_holm, contrast_overview, evidence_scope, interaction_overview,
     interaction_rows, paired_log_ratio,
+    summarize_study,
 )
 
 
@@ -139,6 +141,34 @@ class MechanismV3PlanTests(unittest.TestCase):
             self.assertFalse(configs[f"unchecked_{suffix}"]["parent_check"])
         for name in ("known_2", "shuffled_known_2", "known_sbx", "known_coord"):
             self.assertEqual(configs[name]["block_size"], 2)
+
+    def test_resume_selects_only_incomplete_group_without_changing_registration(self):
+        commands = build_commands(self.plan, "smoke", "attribution", Path("study"), Path("store"), 4)
+        original = copy.deepcopy(commands)
+        def complete(case):
+            config = case.iemoeo
+            return not (config.parent_check_mode == "local_scalar" and config.parent_check
+                        and config.principle_probe_radius == .4 and case.problem == "wfg9")
+        with patch("run_iemoeo_mechanisms.stored_result_complete", side_effect=complete):
+            pending = incomplete_commands(commands)
+        self.assertEqual([command["variant"] for command in pending], ["checked_04"])
+        self.assertEqual(commands, original)
+
+    def test_incomplete_summary_names_group_and_missing_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            schedule = {"stage": "pilot", "suite": "attribution", "plan": {},
+                        "commands": [{"variant": "checked_04", "tasks": 180}]}
+            (root / "schedule.json").write_text(json.dumps(schedule, ensure_ascii=False), encoding="utf-8")
+            validation = {"expected": 180, "completed": 179, "missing": [("wfg6", 10, "IEMOEO", 14)]}
+            with patch("summarize_iemoeo_mechanisms.load_rows", return_value=([], validation)):
+                with self.assertRaisesRegex(RuntimeError, "checked_04.*179/180.*WFG6 M10 seed=14"):
+                    summarize_study(root)
+            self.assertFalse((root / "mechanism_summary").exists())
+            validation["expected"] = 181
+            with patch("summarize_iemoeo_mechanisms.load_rows", return_value=([], validation)):
+                with self.assertRaisesRegex(ValueError, "清单任务数量与登记不符"):
+                    summarize_study(root)
 
 
 class MechanismStatisticsTests(unittest.TestCase):

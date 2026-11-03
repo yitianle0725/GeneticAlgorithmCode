@@ -175,9 +175,17 @@ def summarize_study(root: Path) -> dict:
     for command in schedule["commands"]:
         name = command["variant"]
         arm_root = root / name
-        rows, validation = load_rows(arm_root)
-        if validation["completed"] != command["tasks"]:
-            raise ValueError(f"{name} 的任务数量与登记不符")
+        rows, validation = load_rows(arm_root, allow_incomplete=True)
+        if validation["expected"] != command["tasks"]:
+            raise ValueError(f"{name} 的清单任务数量与登记不符")
+        if validation["missing"]:
+            missing = ", ".join(f"{p.upper()} M{m} seed={seed}" for p, m, _, seed in validation["missing"])
+            raise RuntimeError(
+                f"机制组 {name} 未完成：{validation['completed']}/{command['tasks']}；缺失：{missing}。\n"
+                f"失败详情：{arm_root / 'failures.json'}\n"
+                "请在原机制运行命令中增加 --retry-incomplete --execute 补齐后再汇总；"
+                "不跳过缺失任务生成完整统计。"
+            )
         if any(row.get("n_eval") != row["max_fes"] for row in rows):
             raise ValueError(f"{name} 存在实际 FE 与预算不一致的结果")
         for row in rows:
@@ -266,7 +274,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("study", type=Path, help="例如 results/iemoeo_mechanisms_v2/pilot/attribution，兼容旧版登记")
     args = parser.parse_args()
-    summary = summarize_study(args.study)
+    try:
+        summary = summarize_study(args.study)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"汇总未完成：{exc}", file=sys.stderr)
+        return 2
     print(f"已汇总 {summary['completed']} 个机制任务：{args.study / 'mechanism_summary'}")
     print(summary["interpretation"])
     return 0

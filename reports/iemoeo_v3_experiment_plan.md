@@ -106,6 +106,9 @@ python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v3/smoke
 # 完整开发 pilot，包含核心、邻域及分块；失败或中断后可执行同一命令续跑
 python scripts/run_iemoeo_mechanisms.py --stage pilot --suite attribution --workers 4 --execute
 python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v3/pilot/attribution
+
+# 个别任务失败时，只补未完成组和未完成 seed，保留原科学配置及冻结清单
+python scripts/run_iemoeo_mechanisms.py --stage pilot --suite attribution --workers 4 --retry-incomplete --execute
 ```
 
 资源有限时，分别执行 `--suite parents` 和 `--suite blocks`，用于解决当前两个疑点；

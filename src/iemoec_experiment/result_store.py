@@ -14,6 +14,7 @@ from pathlib import Path
 from .config import ExperimentCase, default_ref_partitions
 from .manifest import TASK_FIELDS, task_key
 from .metrics import metric_schema_version_for_problem
+from .result_lock import result_lock
 
 
 CUSTOM_ALGORITHMS = {"IEMOEC", "IEMOEO"}
@@ -159,13 +160,7 @@ def run_stored_case(
     skipped = {"status": "skipped", "output_dir": str(directory), **case.to_dict()}
     if not force and stored_result_complete(case):
         return skipped
-    directory.parent.mkdir(parents=True, exist_ok=True)
-    lock = directory.with_name(directory.name + ".lock")
-    try:
-        lock.mkdir()
-    except FileExistsError as exc:
-        raise RuntimeError(f"结果正在写入或存在未清理的锁目录：{lock}") from exc
-    try:
+    with result_lock(directory):
         if not force and stored_result_complete(case):
             return skipped
         if not force and not directory.exists() and case.normalized_algorithm not in CUSTOM_ALGORITHMS:
@@ -189,5 +184,3 @@ def run_stored_case(
             raise RuntimeError(f"运行结果不完整，不能标记为可复用：{directory}")
         _write_identity(case)
         return result
-    finally:
-        lock.rmdir()

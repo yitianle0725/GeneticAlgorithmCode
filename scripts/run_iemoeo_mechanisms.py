@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from run import build_parser, resolve_cases
-from iemoec_experiment.result_store import implementation_signature
+from iemoec_experiment.result_store import implementation_signature, stored_result_complete
 
 DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v3.json"
 
@@ -74,6 +74,16 @@ def write_schedule(path: Path, plan: dict, stage: str, suite: str, commands: lis
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def incomplete_commands(commands: list[dict]) -> list[dict]:
+    """只筛执行任务，不修改完整冻结清单、参数或实验组。"""
+    pending = []
+    for command in commands:
+        cases = resolve_cases(build_parser().parse_args(command["arguments"]))
+        if any(not stored_result_complete(case) for case in cases):
+            pending.append(command)
+    return pending
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
@@ -83,6 +93,7 @@ def main() -> int:
     parser.add_argument("--result-store", type=Path, default=ROOT / "results" / "algorithms")
     parser.add_argument("--workers", type=int)
     parser.add_argument("--execute", action="store_true", help="实际执行；省略时仅登记和显示清单")
+    parser.add_argument("--retry-incomplete", action="store_true", help="只续跑未完成机制组中的未完成任务，保留原冻结清单")
     args = parser.parse_args()
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
     if args.suite not in plan["suites"]:
@@ -102,13 +113,19 @@ def main() -> int:
     for command in commands:
         print(f"  {command['variant']}: {command['tasks']} 项 | {command['label']}", flush=True)
     print(f"冻结清单：{schedule}", flush=True)
+    if args.retry_incomplete:
+        all_count = len(commands)
+        commands = incomplete_commands(commands)
+        print(f"续跑机制组：{len(commands)}/{all_count}，已完成组直接复用", flush=True)
     if not args.execute:
         print("已登记，尚未启动计算。增加 --execute 执行此阶段。")
         return 0
     failed = []
     for index, command in enumerate(commands, start=1):
         print(f"[{index}/{len(commands)}] 开始机制组 {command['variant']}", flush=True)
-        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "run.py"), *command["arguments"]])
+        retry_arguments = ["--only-incomplete"] if args.retry_incomplete else []
+        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "run.py"),
+                                 *command["arguments"], *retry_arguments])
         if result.returncode:
             failed.append(command["variant"])
     print(f"机制组完成：{len(commands) - len(failed)}/{len(commands)}；失败组：{failed}")
