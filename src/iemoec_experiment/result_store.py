@@ -31,7 +31,7 @@ def comparable_config(config: dict) -> dict:
 
 
 @cache
-def implementation_signature(algorithm: str) -> dict:
+def implementation_signature(algorithm: str, architecture: str = "founder") -> dict:
     """IEMOEO 自身的修改只影响 IEMOEO，不使成熟基线失效。"""
     modules = [
         "factory", "problems", "initialization", "normalization",
@@ -39,15 +39,18 @@ def implementation_signature(algorithm: str) -> dict:
     ]
     if algorithm == "IEMOEO":
         modules.extend(["iemoeo", "iemoeo_diagnostics"])
+        if architecture == "s3_attribution":
+            modules.extend(["iemoeo_founder", "iemoeo_attribution", "iemoec", "directions", "directional_memory", "source_budget"])
     elif algorithm == "IEMOEC":
         modules.extend([
             "iemoec", "principle", "directions", "directional_memory", "source_budget",
         ])
     directory = Path(__file__).parent
-    sources = {
-        name: hashlib.sha256((directory / f"{name}.py").read_bytes()).hexdigest()
-        for name in modules
-    }
+    sources = {}
+    for name in modules:
+        # 旧算法执行字节原样迁入 founder 文件；保留旧摘要键和结果身份。
+        filename = "iemoeo_founder" if algorithm == "IEMOEO" and architecture == "founder" and name == "iemoeo" else name
+        sources[name] = hashlib.sha256((directory / f"{filename}.py").read_bytes()).hexdigest()
     versions = {"python": f"{sys.version_info.major}.{sys.version_info.minor}"}
     for package in ("numpy", "scipy", "pymoo", "numba"):
         try:
@@ -57,10 +60,16 @@ def implementation_signature(algorithm: str) -> dict:
     return {"sources": sources, "versions": versions}
 
 
+def case_implementation_signature(case: ExperimentCase) -> dict:
+    if case.normalized_algorithm == "IEMOEO" and case.iemoeo.architecture != "founder":
+        return implementation_signature("IEMOEO", case.iemoeo.architecture)
+    return implementation_signature(case.normalized_algorithm)
+
+
 def result_identity(case: ExperimentCase) -> str:
     values = {
         "config": comparable_config(case.to_dict()),
-        "implementation": implementation_signature(case.normalized_algorithm),
+        "implementation": case_implementation_signature(case),
         "metric_schema": metric_schema_version_for_problem(case.normalized_problem),
         "reference_partitions": case.ref_partitions or default_ref_partitions(case.n_obj),
     }
@@ -143,7 +152,7 @@ def _write_identity(case: ExperimentCase, imported_from: str | None = None) -> N
 
     _json_dump(case.output_dir / "storage_identity.json", {
         "identity": result_identity(case),
-        "implementation": implementation_signature(case.normalized_algorithm),
+        "implementation": case_implementation_signature(case),
         "imported_from": imported_from,
         # 历史基线没有源码/环境摘要，迁入时依据 schema 和完整配置核对。
         "legacy_implementation_verified": imported_from is None,
@@ -180,6 +189,10 @@ def run_stored_case(
         # 中途失败时，不能让旧的完成标记掩盖本次未完成的写入。
         (directory / "storage_identity.json").unlink(missing_ok=True)
         result = _execute_case(case, force, verbose_fe)
+        if case.normalized_algorithm == "IEMOEO" and case.iemoeo.architecture == "s3_attribution":
+            from .iemoeo_attribution import attribution_metrics
+            result = attribution_metrics(result, case.iemoeo)
+            _json_dump(directory / "metrics.json", result)
         if not complete_result(directory, case):
             raise RuntimeError(f"运行结果不完整，不能标记为可复用：{directory}")
         _write_identity(case)

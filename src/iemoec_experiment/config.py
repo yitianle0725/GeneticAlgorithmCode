@@ -480,8 +480,40 @@ class IEMOEOConfig:
     representative_selection: str = "local_best"
     selection_audit: bool = False
     parent_check_mode: str = "representative_dominance"
+    architecture: str = "founder"
+    persistent_direction_memory: bool = True
+    direction_elite_protection: bool = True
+    attribution_batch_ratio: float = 4.0
+    attribution_local_steps: int = 3
+    qualification_mode: str = "none"
+    qualification_fe_ratio: float = 0.2
+
+    def attribution_fields(self) -> tuple[str, ...]:
+        return ("architecture", "persistent_direction_memory", "direction_elite_protection",
+                "attribution_batch_ratio", "attribution_local_steps", "qualification_mode",
+                "qualification_fe_ratio")
 
     def validate(self, n_obj: int) -> None:
+        if self.architecture not in ("founder", "s3_attribution"):
+            raise ValueError("不支持的 IE-MOEO 架构")
+        if self.architecture == "s3_attribution":
+            if (self.origin_ratio != 1 or self.parent_check or not self.elitist_pool
+                    or not self.diversity_maintenance or self.outer_survival != "nsga3"
+                    or self.normalization_mode != "global" or not self.block_combination
+                    or self.representative_selection == "global_best"
+                    or self.objective_weights is not None):
+                raise ValueError("归因架构要求 origin_ratio=1、关闭旧资格检查、NSGA3、公共归一化及完整候选池；只支持每方向最佳/随机代表")
+            if (not math.isfinite(self.attribution_batch_ratio) or self.attribution_batch_ratio <= 0
+                    or type(self.attribution_local_steps) is not int or self.attribution_local_steps < 1):
+                raise ValueError("归因批量比例与局部步数必须为正")
+            if self.qualification_mode not in ("none", "probe_checked", "probe_unchecked"):
+                raise ValueError("不支持的有限邻域资格模式")
+            if not 0 < self.qualification_fe_ratio < .5:
+                raise ValueError("资格探测 FE 比例必须在 (0,0.5) 内")
+            if self.qualification_mode != "none" and self.representative_selection != "local_best":
+                raise ValueError("资格探测对照要求每方向最佳代表")
+            if self.qualification_mode != "none" and self.principle_probe_radius <= 0:
+                raise ValueError("有限邻域资格探测要求正半径")
         if not 0 < self.origin_ratio <= 1:
             raise ValueError("IE-MOEO origin_ratio 必须在 (0, 1] 内")
         sizes = {
@@ -598,7 +630,7 @@ class ExperimentCase:
     @property
     def algorithm_schema_version(self) -> int:
         if self.normalized_algorithm == "IEMOEO":
-            return 3
+            return 4 if self.iemoeo.architecture == "s3_attribution" else 3
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.algorithm_schema_version
         if self.normalized_algorithm == "AGEMOEA2STABLE":
@@ -608,7 +640,7 @@ class ExperimentCase:
     @property
     def algorithm_variant(self) -> str:
         if self.normalized_algorithm == "IEMOEO":
-            return "iemoeo"
+            return "iemoeo_s3_attribution" if self.iemoeo.architecture == "s3_attribution" else "iemoeo"
         if self.normalized_algorithm == "IEMOEC":
             return self.iemoec.variant
         if self.normalized_algorithm == "AGEMOEA2STABLE":
@@ -643,6 +675,9 @@ class ExperimentCase:
         data.pop("result_store")
         if self.normalized_algorithm == "IEMOEO":
             data.pop("iemoec")
+            if self.iemoeo.architecture == "founder":
+                for name in self.iemoeo.attribution_fields():
+                    data["iemoeo"].pop(name)
             weights = self.iemoeo.objective_weights
             data["iemoeo"]["objective_weights"] = (
                 list(weights) if weights is not None else None

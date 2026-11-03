@@ -320,6 +320,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-elitist-pool", action="store_true")
     parser.add_argument("--verbose-fe", action="store_true", help="输出 IE-MOEO 每轮的评价次数分账")
     parser.add_argument("--only-incomplete", action="store_true", help="仅向工作进程提交未完成任务，已完成结果直接复用")
+    parser.add_argument("--iemoeo-architecture", choices=["founder", "s3_attribution"], default="founder")
+    parser.add_argument("--persistent-direction-memory", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--direction-elite-protection", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--attribution-batch-ratio", type=float, default=4.)
+    parser.add_argument("--attribution-local-steps", type=int, default=3)
+    parser.add_argument("--qualification-mode", choices=["none", "probe_checked", "probe_unchecked"], default="none")
+    parser.add_argument("--qualification-fe-ratio", type=float, default=.2)
     return parser
 
 
@@ -461,6 +468,13 @@ def resolve_cases(args) -> list[ExperimentCase]:
         representative_selection=args.representative_selection,
         selection_audit=args.iemoeo_selection_audit,
         parent_check_mode=args.parent_check_mode,
+        architecture=args.iemoeo_architecture,
+        persistent_direction_memory=args.persistent_direction_memory,
+        direction_elite_protection=args.direction_elite_protection,
+        attribution_batch_ratio=args.attribution_batch_ratio,
+        attribution_local_steps=args.attribution_local_steps,
+        qualification_mode=args.qualification_mode,
+        qualification_fe_ratio=args.qualification_fe_ratio,
     )
     cases = []
     for problem, n_obj in scenarios:

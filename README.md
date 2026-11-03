@@ -641,3 +641,22 @@ schema 2 新增代表选择、真实拥挤距离和无全局组合控制。none 
 使用新结果目录，不混入 v1/v2；公共 baseline 的配置与实现未改动，仍可复用。
 S3-Elite 不是独立进化的单因素控制，单 seed 的 A12 标签不再输出为“large”，统一标记为样本不足解释。
 数学极值认证、岛内并行、低复杂度阶数及网络/DRL 联合优势仍没有被这些对照证明。
+
+## 15. S3 支撑机制与三个核心规则的归因
+
+S3-Elite 是 IEMOEC 的实际版本，可以作为论文候选；其性能不自动证明严格极值资格和元素组合。
+新增 `--iemoeo-architecture s3_attribution`（schema4）在统一支撑层中独立切换 I/P/C/M/E：
+封闭局部交配、方向最佳代表、块继承、跨轮方向记忆和方向精英保护。
+默认 founder 引擎与旧 schema3、S3-Elite 和成熟算法结果保持原样，已有结果继续复用。
+
+新入口和完整说明见 [归因与创新表述路线](reports/iemoeo_s3_attribution_plan.md)。
+
+```powershell
+python scripts/run_s3_attribution.py --stage pilot --workers 4 --execute
+python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_s3_attribution_v1/pilot/screen
+```
+
+先运行 16 组 screen（1440 项名义任务，M3/5/8、5 seeds），再按需要扩展完整 32 因素组合及控制，
+`--suite factorial` 共 37 组、3330 项，复用先前 screen。新增资格对照区分等探测成本下的资格筛选，
+不使用不合格亲本兜底；没有完整数值资格时不得称为数学极值。
+汇总自动生成 `factorial_effects.csv` 和 `claim_evidence.md`，记录具体规则、条件和证据边界。

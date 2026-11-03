@@ -1,0 +1,939 @@
+{
+  "name": "iemoeo_s3_attribution_v1",
+  "description": "Separate three core rules from directional memory and elite protection on one shared implementation. No novelty certification.",
+  "common_arguments": [
+    "--iemoeo-architecture",
+    "s3_attribution",
+    "--origin-ratio",
+    "1",
+    "--no-parent-check",
+    "--iemoeo-selection-audit"
+  ],
+  "variants": {
+    "f00000": {
+      "label": "I=0, P=0, C=0, M=0, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 0,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f00001": {
+      "label": "I=0, P=0, C=0, M=0, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 0,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f00010": {
+      "label": "I=0, P=0, C=0, M=1, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 0,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f00011": {
+      "label": "I=0, P=0, C=0, M=1, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f00100": {
+      "label": "I=0, P=0, C=1, M=0, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 1,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f00101": {
+      "label": "I=0, P=0, C=1, M=0, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 1,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f00110": {
+      "label": "I=0, P=0, C=1, M=1, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 1,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f00111": {
+      "label": "I=0, P=0, C=1, M=1, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--representative-selection",
+        "local_random"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 0,
+        "C": 1,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f01000": {
+      "label": "I=0, P=1, C=0, M=0, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 0,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f01001": {
+      "label": "I=0, P=1, C=0, M=0, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 0,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f01010": {
+      "label": "I=0, P=1, C=0, M=1, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "sbx_only",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f01011": {
+      "label": "I=0, P=1, C=0, M=1, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f01100": {
+      "label": "I=0, P=1, C=1, M=0, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 1,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f01101": {
+      "label": "I=0, P=1, C=1, M=0, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 1,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f01110": {
+      "label": "I=0, P=1, C=1, M=1, E=0",
+      "arguments": [
+        "--no-isolation",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 1,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f01111": {
+      "label": "I=0, P=1, C=1, M=1, E=1",
+      "arguments": [
+        "--no-isolation"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 1,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f10000": {
+      "label": "I=1, P=0, C=0, M=0, E=0",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 0,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f10001": {
+      "label": "I=1, P=0, C=0, M=0, E=1",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 0,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f10010": {
+      "label": "I=1, P=0, C=0, M=1, E=0",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 0,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f10011": {
+      "label": "I=1, P=0, C=0, M=1, E=1",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f10100": {
+      "label": "I=1, P=0, C=1, M=0, E=0",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 1,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f10101": {
+      "label": "I=1, P=0, C=1, M=0, E=1",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 1,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f10110": {
+      "label": "I=1, P=0, C=1, M=1, E=0",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 1,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f10111": {
+      "label": "I=1, P=0, C=1, M=1, E=1",
+      "arguments": [
+        "--representative-selection",
+        "local_random"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 1,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f11000": {
+      "label": "I=1, P=1, C=0, M=0, E=0",
+      "arguments": [
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f11001": {
+      "label": "I=1, P=1, C=0, M=0, E=1",
+      "arguments": [
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f11010": {
+      "label": "I=1, P=1, C=0, M=1, E=0",
+      "arguments": [
+        "--combination-method",
+        "sbx_only",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "f11011": {
+      "label": "I=1, P=1, C=0, M=1, E=1",
+      "arguments": [
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f11100": {
+      "label": "I=1, P=1, C=1, M=0, E=0",
+      "arguments": [
+        "--no-persistent-direction-memory",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 1,
+        "M": 0,
+        "E": 0
+      }
+    },
+    "f11101": {
+      "label": "I=1, P=1, C=1, M=0, E=1",
+      "arguments": [
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 1,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f11110": {
+      "label": "I=1, P=1, C=1, M=1, E=0",
+      "arguments": [
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 1,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "full": {
+      "label": "I=1, P=1, C=1, M=1, E=1",
+      "arguments": [],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 1,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "probe_checked": {
+      "label": "probe_checked with equal probe allowance",
+      "arguments": [
+        "--qualification-mode",
+        "probe_checked"
+      ]
+    },
+    "probe_unchecked": {
+      "label": "probe_unchecked with equal probe allowance",
+      "arguments": [
+        "--qualification-mode",
+        "probe_unchecked"
+      ]
+    },
+    "no_combination": {
+      "label": "Combination allowance redirected to local search",
+      "arguments": [
+        "--combination-method",
+        "none"
+      ]
+    },
+    "s3_elite_reference": {
+      "label": "Unchanged historical S3-Elite (performance reference only)",
+      "algorithm": "IEMOEC",
+      "arguments": [
+        "--iemoec-variant",
+        "s3_elite",
+        "--origin-ratio",
+        "0.2"
+      ]
+    },
+    "s3_hybrid_reference": {
+      "label": "Unchanged historical S3-Hybrid: direct elite-off control for S3-Elite",
+      "algorithm": "IEMOEC",
+      "arguments": [
+        "--iemoec-variant",
+        "s3_hybrid",
+        "--origin-ratio",
+        "0.2"
+      ]
+    }
+  },
+  "suites": {
+    "screen": [
+      "f00000",
+      "f00001",
+      "f00010",
+      "f00011",
+      "f11100",
+      "f11101",
+      "f11110",
+      "full",
+      "f01111",
+      "f10111",
+      "f11011",
+      "probe_checked",
+      "probe_unchecked",
+      "no_combination",
+      "s3_elite_reference",
+      "s3_hybrid_reference"
+    ],
+    "factorial": [
+      "f00000",
+      "f00001",
+      "f00010",
+      "f00011",
+      "f00100",
+      "f00101",
+      "f00110",
+      "f00111",
+      "f01000",
+      "f01001",
+      "f01010",
+      "f01011",
+      "f01100",
+      "f01101",
+      "f01110",
+      "f01111",
+      "f10000",
+      "f10001",
+      "f10010",
+      "f10011",
+      "f10100",
+      "f10101",
+      "f10110",
+      "f10111",
+      "f11000",
+      "f11001",
+      "f11010",
+      "f11011",
+      "f11100",
+      "f11101",
+      "f11110",
+      "full",
+      "probe_checked",
+      "probe_unchecked",
+      "no_combination",
+      "s3_elite_reference",
+      "s3_hybrid_reference"
+    ],
+    "qualification": [
+      "full",
+      "probe_checked",
+      "probe_unchecked"
+    ],
+    "package": [
+      "f00000",
+      "f00001",
+      "f00010",
+      "f00011",
+      "f11100",
+      "f11101",
+      "f11110",
+      "full"
+    ]
+  },
+  "contrasts": [
+    {
+      "id": "elite_k0_m0",
+      "target": "f00001",
+      "control": "f00000",
+      "claim": "Directional elite protection at fixed core/memory"
+    },
+    {
+      "id": "memory_k0_e0",
+      "target": "f00010",
+      "control": "f00000",
+      "claim": "Persistent directional memory at fixed core/elite"
+    },
+    {
+      "id": "memory_k0_e1",
+      "target": "f00011",
+      "control": "f00001",
+      "claim": "Persistent directional memory at fixed core/elite"
+    },
+    {
+      "id": "elite_k0_m1",
+      "target": "f00011",
+      "control": "f00010",
+      "claim": "Directional elite protection at fixed core/memory"
+    },
+    {
+      "id": "package_m0_e0",
+      "target": "f11100",
+      "control": "f00000",
+      "claim": "Core package at fixed memory/elite setting"
+    },
+    {
+      "id": "package_m0_e1",
+      "target": "f11101",
+      "control": "f00001",
+      "claim": "Core package at fixed memory/elite setting"
+    },
+    {
+      "id": "elite_k1_m0",
+      "target": "f11101",
+      "control": "f11100",
+      "claim": "Directional elite protection at fixed core/memory"
+    },
+    {
+      "id": "package_m1_e0",
+      "target": "f11110",
+      "control": "f00010",
+      "claim": "Core package at fixed memory/elite setting"
+    },
+    {
+      "id": "memory_k1_e0",
+      "target": "f11110",
+      "control": "f11100",
+      "claim": "Persistent directional memory at fixed core/elite"
+    },
+    {
+      "id": "package_m1_e1",
+      "target": "full",
+      "control": "f00011",
+      "claim": "Core package at fixed memory/elite setting"
+    },
+    {
+      "id": "memory_k1_e1",
+      "target": "full",
+      "control": "f11101",
+      "claim": "Persistent directional memory at fixed core/elite"
+    },
+    {
+      "id": "elite_k1_m1",
+      "target": "full",
+      "control": "f11110",
+      "claim": "Directional elite protection at fixed core/memory"
+    },
+    {
+      "id": "single_I",
+      "target": "full",
+      "control": "f01111",
+      "claim": "I at M=E=1"
+    },
+    {
+      "id": "single_P",
+      "target": "full",
+      "control": "f10111",
+      "claim": "P at M=E=1"
+    },
+    {
+      "id": "single_C",
+      "target": "full",
+      "control": "f11011",
+      "claim": "C at M=E=1"
+    },
+    {
+      "id": "qualification",
+      "target": "probe_checked",
+      "control": "probe_unchecked",
+      "claim": "Eligibility effect with identical probe policy and FE allowance"
+    },
+    {
+      "id": "probe_policy",
+      "target": "probe_checked",
+      "control": "full",
+      "claim": "Whole qualification policy including probe cost versus local-search allocation"
+    },
+    {
+      "id": "combination_presence",
+      "target": "full",
+      "control": "no_combination",
+      "claim": "Combination allocation versus continued local search"
+    },
+    {
+      "id": "performance_reference",
+      "target": "full",
+      "control": "s3_elite_reference",
+      "claim": "Multi-change performance comparison; not single-factor attribution"
+    },
+    {
+      "id": "historical_s3_elite",
+      "target": "s3_elite_reference",
+      "control": "s3_hybrid_reference",
+      "claim": "Direct elite-protection effect in historical S3 with other settings unchanged"
+    }
+  ],
+  "interactions": [
+    {
+      "id": "package_x_memory_e0",
+      "cells": [
+        "f11110",
+        "f00010",
+        "f11100",
+        "f00000"
+      ]
+    },
+    {
+      "id": "package_x_memory_e1",
+      "cells": [
+        "full",
+        "f00011",
+        "f11101",
+        "f00001"
+      ]
+    },
+    {
+      "id": "package_x_elite_m0",
+      "cells": [
+        "f11101",
+        "f00001",
+        "f11100",
+        "f00000"
+      ]
+    },
+    {
+      "id": "package_x_elite_m1",
+      "cells": [
+        "full",
+        "f00011",
+        "f11110",
+        "f00010"
+      ]
+    },
+    {
+      "id": "memory_x_elite_k0",
+      "cells": [
+        "f00011",
+        "f00001",
+        "f00010",
+        "f00000"
+      ]
+    },
+    {
+      "id": "memory_x_elite_k1",
+      "cells": [
+        "full",
+        "f11101",
+        "f11110",
+        "f11100"
+      ]
+    }
+  ],
+  "effect_families": [
+    {
+      "id": "package",
+      "factors": [
+        "K",
+        "M",
+        "E"
+      ],
+      "cells": {
+        "000": "f00000",
+        "001": "f00001",
+        "010": "f00010",
+        "011": "f00011",
+        "100": "f11100",
+        "101": "f11101",
+        "110": "f11110",
+        "111": "full"
+      }
+    },
+    {
+      "id": "individual",
+      "factors": [
+        "I",
+        "P",
+        "C",
+        "M",
+        "E"
+      ],
+      "cells": {
+        "00000": "f00000",
+        "00001": "f00001",
+        "00010": "f00010",
+        "00011": "f00011",
+        "00100": "f00100",
+        "00101": "f00101",
+        "00110": "f00110",
+        "00111": "f00111",
+        "01000": "f01000",
+        "01001": "f01001",
+        "01010": "f01010",
+        "01011": "f01011",
+        "01100": "f01100",
+        "01101": "f01101",
+        "01110": "f01110",
+        "01111": "f01111",
+        "10000": "f10000",
+        "10001": "f10001",
+        "10010": "f10010",
+        "10011": "f10011",
+        "10100": "f10100",
+        "10101": "f10101",
+        "10110": "f10110",
+        "10111": "f10111",
+        "11000": "f11000",
+        "11001": "f11001",
+        "11010": "f11010",
+        "11011": "f11011",
+        "11100": "f11100",
+        "11101": "f11101",
+        "11110": "f11110",
+        "11111": "full"
+      }
+    }
+  ],
+  "stages": {
+    "smoke": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3",
+      "seeds": "1",
+      "evals_per_pop": 20,
+      "timing_only": false
+    },
+    "pilot": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg1",
+        "wfg4",
+        "wfg9"
+      ],
+      "objectives": "3,5,8",
+      "seeds": "1-5",
+      "evals_per_pop": 200,
+      "timing_only": false
+    },
+    "confirm": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg1",
+        "wfg4",
+        "wfg9"
+      ],
+      "objectives": "3,5,8",
+      "seeds": "61-90",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "many_objective": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg1",
+        "wfg4",
+        "wfg9"
+      ],
+      "objectives": "3,5,8",
+      "seeds": "61-90",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "timing": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3,5",
+      "seeds": "61-65",
+      "evals_per_pop": 200,
+      "timing_only": true
+    }
+  },
+  "interpretation": {
+    "I": "Closed mating during synchronized local phase; memory/global exchange only between phases, not eternally isolated ancestry.",
+    "P": "Best versus random representative under a fixed direction/normalization, not mathematical extremum.",
+    "C": "Explicit whole-block inheritance versus SBX with equal requested new-evaluation quota.",
+    "M": "Persistent direction memory versus rebuilding identical-capacity pools from current N each batch.",
+    "E": "Direction elite reservation versus same NSGA3 selection without reservation.",
+    "K": "I/P/C all on versus all off; this package effect is not any individual factor.",
+    "Q": "Coordinate-neighborhood finite test only; untested/failed parents forbidden in checked arm, no unqualified fallback; missing combination allowance goes to local search."
+  }
+}

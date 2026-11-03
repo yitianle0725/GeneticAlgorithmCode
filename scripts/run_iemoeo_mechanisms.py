@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from run import build_parser, resolve_cases
-from iemoec_experiment.result_store import implementation_signature, stored_result_complete
+from iemoec_experiment.result_store import implementation_signature, stored_result_complete, case_implementation_signature
 
 DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v3.json"
 
@@ -28,8 +28,9 @@ def build_commands(plan: dict, stage: str, suite: str, output_root: Path,
         common_arguments = [argument for argument in common_arguments if argument != "--iemoeo-selection-audit"]
     for name in plan["suites"][suite]:
         variant = plan["variants"][name]
+        algorithm = variant.get("algorithm", "IEMOEO")
         arguments = [
-            "--preset", "custom", "--algorithms", "IEMOEO",
+            "--preset", "custom", "--algorithms", algorithm,
             "--problems", *configuration["problems"],
             "--objectives", configuration["objectives"], "--seeds", configuration["seeds"],
             "--evals-per-pop", str(configuration["evals_per_pop"]),
@@ -46,8 +47,9 @@ def build_commands(plan: dict, stage: str, suite: str, output_root: Path,
         commands.append({
             "variant": name, "label": variant["label"], "arguments": arguments,
             "tasks": len(cases), "total_fes": sum(case.max_fes for case in cases),
-            "iemoeo_config": cases[0].to_dict()["iemoeo"],
+            f"{'iemoeo' if algorithm == 'IEMOEO' else 'iemoec'}_config": cases[0].to_dict()["iemoeo" if algorithm == "IEMOEO" else "iemoec"],
             "case_template": case_template,
+            "implementation": case_implementation_signature(cases[0]),
         })
     return commands
 
@@ -56,11 +58,13 @@ def write_schedule(path: Path, plan: dict, stage: str, suite: str, commands: lis
     # worker 数可以调整；科学配置和源码在同一登记目录中不可悄悄改变。
     registration = {
         "plan": plan, "stage": stage, "suite": suite,
-        "implementation": implementation_signature("IEMOEO"),
+        "implementation": commands[0].get("implementation", implementation_signature("IEMOEO")),
         "resolved_configurations": [{key: command[key] for key in (
             "variant", "tasks", "total_fes", "case_template",
         )} for command in commands],
     }
+    if any(command.get("implementation", registration["implementation"]) != registration["implementation"] for command in commands):
+        registration["arm_implementations"] = {command["variant"]: command["implementation"] for command in commands}
     encoded = json.dumps(registration, ensure_ascii=False, sort_keys=True).encode("utf-8")
     digest = hashlib.sha256(encoded).hexdigest()
     if path.exists():
@@ -84,11 +88,11 @@ def incomplete_commands(commands: list[dict]) -> list[dict]:
     return pending
 
 
-def main() -> int:
+def main(default_plan: Path = DEFAULT_PLAN, default_suite: str = "core") -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
+    parser.add_argument("--plan", type=Path, default=default_plan)
     parser.add_argument("--stage", choices=["smoke", "pilot", "confirm", "many_objective", "timing"], default="pilot")
-    parser.add_argument("--suite", default="core", help="方案中的套件名，例如 core/parents/blocks/attribution")
+    parser.add_argument("--suite", default=default_suite, help="方案中的套件名，例如 core/parents/blocks/attribution")
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--result-store", type=Path, default=ROOT / "results" / "algorithms")
     parser.add_argument("--workers", type=int)

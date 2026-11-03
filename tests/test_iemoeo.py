@@ -407,7 +407,7 @@ class IEMOEOTests(unittest.TestCase):
     def test_rank_survival_ignores_reference_directions_and_uses_fronts(self):
         runner = self.make_runner(diversity_maintenance=False)
         candidates = Population.new("X", np.zeros((4, 4)), "F", np.array([[3, 3, 3], [1, 1, 1], [4, 4, 4], [2, 2, 2]]))
-        with patch("iemoec_experiment.iemoeo.ReferenceDirectionSurvival", side_effect=AssertionError("unexpected NSGA3")):
+        with patch("iemoec_experiment.iemoeo_founder.ReferenceDirectionSurvival", side_effect=AssertionError("unexpected NSGA3")):
             selected = runner._select_founders(candidates)
         np.testing.assert_array_equal(selected.get("F"), [[1, 1, 1], [2, 2, 2]])
 

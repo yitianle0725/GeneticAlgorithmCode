@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import sys
+from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -83,6 +84,54 @@ def interaction_rows(arms: dict[str, list[dict]], interactions: list[dict]) -> l
     return reports
 
 
+def factorial_effect_rows(arms: dict[str, list[dict]], families: list[dict]) -> list[dict]:
+    """先在同场景、同 seed 内等权平均背景的 log 效应，再以 seed 为检验单位。"""
+    reports = []
+    for family in families:
+        cells = family["cells"]
+        if set(cells) != {"".join(bits) for bits in product("01", repeat=len(family["factors"]))}:
+            raise ValueError("因子方案未登记完整的二水平组合")
+        if not all(name in arms for name in cells.values()):
+            continue
+        names = family["factors"]
+        keys = {(r["problem"], r["n_obj"], r["seed"]) for r in arms[next(iter(cells.values()))]}
+        lookup = {}
+        for bits, name in cells.items():
+            lookup[bits] = {(r["problem"], r["n_obj"], r["seed"]): r["igd_plus"] for r in arms[name]}
+            if set(lookup[bits]) != keys:
+                raise ValueError("因子效应的场景和 seed 未完整配对")
+        current = []
+        for position, factor in enumerate(names):
+            pairs = []
+            for background in product("01", repeat=len(names) - 1):
+                low = list(background)
+                low.insert(position, "0")
+                high = low.copy()
+                high[position] = "1"
+                pairs.append(("".join(high), "".join(low)))
+            for problem, n_obj in sorted({(p, m) for p, m, _ in keys}):
+                seeds = sorted(s for p, m, s in keys if (p, m) == (problem, n_obj))
+                differences = np.asarray([
+                    np.mean([float(paired_log_ratio(np.asarray(lookup[high][(problem, n_obj, seed)]),
+                                                    np.asarray(lookup[low][(problem, n_obj, seed)])))
+                             for high, low in pairs]) for seed in seeds
+                ])
+                differences[np.abs(differences) < 1e-12] = 0.
+                current.append({
+                    "family": family["id"], "factor": factor, "metric": "igd_plus",
+                    "problem": problem, "n_obj": n_obj, "n_pairs": len(seeds),
+                    "background_pairs": len(pairs),
+                    "median_log_effect": float(np.median(differences)),
+                    "median_ratio": float(np.exp(np.median(differences))),
+                    "p_value": 1. if np.all(differences == 0) else float(wilcoxon(differences).pvalue),
+                    "interpretation": "开/关的背景平均对数效应；负值有利，背景不是额外独立样本",
+                })
+        # 两个检验族在方案中事先分开：package(K/M/E) 与 individual(I/P/C/M/E)。
+        apply_global_holm(current)
+        reports.extend(current)
+    return reports
+
+
 def diagnostic_summary(name: str, rows: list[dict], rounds: list[dict]) -> dict:
     def total(field: str) -> int:
         return sum(int(row.get(field) or 0) for row in rounds)
@@ -119,6 +168,13 @@ def diagnostic_summary(name: str, rows: list[dict], rounds: list[dict]) -> dict:
         "combination_children_selected": total("combination_children_selected"),
         "combination_children_nondominated": total("combination_children_nondominated"),
         "schema3_diagnostics_available": bool(rounds) and all("parent_check_mode" in r for r in rounds),
+        "probe_fes": total("probe_fes"),
+        "probe_budget_requested": total("probe_budget_requested"),
+        "probe_complete_representatives": total("probe_complete_representatives"),
+        "probe_qualified_representatives": total("probe_qualified_representatives"),
+        "protected_elite_count": total("protected_elite_count"),
+        "attribution_rounds": sum(r.get("phase") == "s3_scaffold_attribution" for r in rounds),
+        "selection_pair_audit_available": bool(rounds) and all("audited_pair_count" in r for r in rounds),
     }
 
 
@@ -166,6 +222,42 @@ def interaction_overview(rows: list[dict]) -> list[dict]:
     } for name, group in groups.items()]
 
 
+def write_claim_ledger(output: Path, schedule: dict, overview: list[dict], effects: list[dict]) -> None:
+    if not schedule["plan"].get("effect_families"):
+        return
+    rules = [
+        ("I", "固定方向与归一化下，在局部阶段封闭交配，阶段结束后才交换候选。", "single_I"),
+        ("P", "每个预定方向选择局部标量最佳，而非随机选代表。", "single_P"),
+        ("C", "从不同决策亲本整块继承并变异，与等组合新增 FE 的 SBX 比较。", "single_C"),
+        ("Q", "在预算允许的完整坐标探测中未发现改进才获得数值资格；不证明驻点。", "qualification"),
+    ]
+    lines = ["# 机制证据台账", "", f"阶段：{schedule['stage']}；冻结方案：{schedule['registration_sha256']}。", "",
+             "本台账区分规则、条件和证据，不自动认证文献新颖性，也不把 pilot 数值优势写成普遍定理。", "",
+             "| 要素 | 已实现的具体规则 | 本轮 IGD+ 场景更好/相等/更差 |", "|---|---|---|"]
+    for factor, rule, contrast in rules:
+        row = next((r for r in overview if r["contrast"] == contrast and r["metric"] == "igd_plus"), None)
+        result = f"{row['median_better']}/{row['median_equal']}/{row['median_worse']}" if row else "该套件未覆盖"
+        lines.append(f"| {factor} | {rule} | {result} |")
+    lines += ["", "I/P/C 单因素比较的条件是 M=E=1；不能直接外推到没有记忆和保护的情形。", "",
+              "| 条件性对照 | IGD+ 更好/相等/更差 | Holm 显著更好/更差 |", "|---|---|---|"]
+    for row in overview:
+        if row["metric"] != "igd_plus":
+            continue
+        lines.append(f"| {row['contrast']} | {row['median_better']}/{row['median_equal']}/{row['median_worse']} | {row['significant_better']}/{row['significant_worse']} |")
+    lines += ["", "factorial_effects.csv：先在每个 seed 内平均匹配背景，再以 seed 为检验单位；未运行完整个体五因素时不输出该族。", "",
+              "写作顺序：", "",
+              "1. 先报告以上实际规则与 FE、父代来源、探测完整性审计；默认 full 不含极值资格探测。",
+              "2. 若收益只在 M/E 打开时出现，表述必须限定为‘在持久方向记忆/精英保护支撑下’。",
+              "3. 若 K 的效应弱而 M/E 强，主要收益应归于支撑机制，不归于三个核心。",
+              "4. Q 必须同时报告合格比例、实际探测成本和组合转移预算；probe_unchecked 匹配的是名义配额，缓存和后续轨迹可能令实际探测 FE 不同。",
+              "5. 冻结规则和条件，用独立确认 seeds 复核；若新增规则来自确认结果，需要另用未查看的 seeds。",
+              "6. 最后进行针对实际规则的文献对照，才能讨论是否构成新的机制或组合；代码归属与新颖性不同。", "",
+              "历史 S3-Elite/S3-Hybrid 的差异可解释原版本的精英保护；新支撑层中的记忆效应不自动等同于历史 S3 的记忆效应。", "",
+              "当前可使用的研究描述：‘研究方向微群体内局部搜索、代表选择和跨群体组合，在统一记忆与环境选择条件下检验其贡献和交互。’", "",
+              "当前不可直接使用的结论：‘发现新极值原理’、‘数学局部最优得到保证’、‘三个核心已普遍优于遗传算子’。", ""]
+    (output / "claim_evidence.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def summarize_study(root: Path) -> dict:
     schedule = json.loads((root / "schedule.json").read_text(encoding="utf-8"))
     plan = schedule["plan"]
@@ -192,9 +284,10 @@ def summarize_study(root: Path) -> dict:
             directory = Path(row["path"])
             config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
             identity = json.loads((directory / "storage_identity.json").read_text(encoding="utf-8"))
-            if config["iemoeo"] != command["iemoeo_config"]:
-                raise ValueError(f"{name} 的 IE-MOEO 参数不符合登记")
-            if identity["implementation"] != schedule["implementation"]:
+            parameter_key = "iemoeo" if config["algorithm"] == "IEMOEO" else "iemoec"
+            if config[parameter_key] != command[f"{parameter_key}_config"]:
+                raise ValueError(f"{name} 的算法参数不符合登记")
+            if identity["implementation"] != command.get("implementation", schedule["implementation"]):
                 raise ValueError(f"{name} 的源码/依赖与冻结记录不同")
             # 只在分析内使用机制组名称，原 metrics.json 的算法名保持 IEMOEO。
             row["algorithm"] = name
@@ -206,10 +299,12 @@ def summarize_study(root: Path) -> dict:
             )}})
         arms[name] = rows
         rounds = []
-        for path in result_files(arm_root, "iemoeo_diagnostics.csv"):
+        is_iemoeo = "iemoeo_config" in command
+        for path in result_files(arm_root, "iemoeo_diagnostics.csv" if is_iemoeo else "iemoec_diagnostics.csv"):
             with path.open(encoding="utf-8-sig", newline="") as handle:
                 rounds.extend(csv.DictReader(handle))
-        activation.append(diagnostic_summary(name, rows, rounds))
+        activation.append(diagnostic_summary(name, rows, rounds) if is_iemoeo else
+                          {"variant": name, "runs": len(rows), "rounds": len(rounds), "role": "performance_reference"})
 
     tests = []
     for contrast in plan["contrasts"]:
@@ -248,19 +343,27 @@ def summarize_study(root: Path) -> dict:
                 better = row["target_median"] > row["competitor_median"]
             row["target_result"] = "+" if better else "-"
     interactions = interaction_rows(arms, plan["interactions"])
+    effects = factorial_effect_rows(arms, plan.get("effect_families", []))
     output = root / "mechanism_summary"
     output.mkdir(exist_ok=True)
     write_csv(output / "registered_contrasts.csv", tests)
-    write_csv(output / "contrast_overview.csv", contrast_overview(tests))
+    overview = contrast_overview(tests)
+    write_csv(output / "contrast_overview.csv", overview)
     write_csv(output / "interactions.csv", interactions)
     write_csv(output / "interaction_overview.csv", interaction_overview(interactions))
+    write_csv(output / "factorial_effects.csv", effects)
     write_csv(output / "activation.csv", activation)
     write_csv(output / "run_metrics.csv", run_metrics)
+    write_claim_ledger(output, schedule, overview, effects)
     summary = {
         "stage": schedule["stage"], "suite": schedule["suite"],
         "registration_sha256": schedule["registration_sha256"],
         "completed": len(run_metrics), "contrasts": len(tests),
         "significant_contrasts": sum(row["target_result"] != "=" for row in tests),
+        "interaction_tests": len(interactions),
+        "significant_interactions": sum(row["p_holm"] < .05 for row in interactions),
+        "factor_effect_tests": len(effects),
+        "significant_factor_effects": sum(row["p_holm"] < .05 for row in effects),
         "interpretation": "smoke/pilot 仅用于实现和开发诊断，不能宣称机制已获确认" if schedule["stage"] in ("smoke", "pilot")
                           else "按登记检验解释，报告正面、负面与不确定结果；不可将不显著当成等效",
         "secondary_metrics": "方向覆盖、决策多样性、GD+ 和解集大小只作描述；输出大小不等时需等基数补充分析",
