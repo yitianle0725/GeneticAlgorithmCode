@@ -623,6 +623,7 @@ python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_mechanisms_v3/pilot
 
 `--retry-incomplete` 保留完整冻结清单，只启动不完整的机制组；其内部通过统一入口的
 `--only-incomplete` 只向工作进程提交未完成任务，不重算已完成 seed，不使用 `--force`。
+切换套件时，已复用组也会登记新的结果引用清单；全部命中缓存的批次同样可以完整汇总。
 汇总仍要求全部结果完整；缺失时列出组名、函数、M 和 seed，并以非零状态退出。
 
 结果库使用操作系统文件锁，进程异常退出后锁自动释放；有本协议身份的遗留锁目录可安全接管。
@@ -660,3 +661,7 @@ python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_s3_attribution_v1/p
 `--suite factorial` 共 37 组、3330 项，复用先前 screen。新增资格对照区分等探测成本下的资格筛选，
 不使用不合格亲本兜底；没有完整数值资格时不得称为数学极值。
 汇总自动生成 `factorial_effects.csv` 和 `claim_evidence.md`，记录具体规则、条件和证据边界。
+
+完整五因素开发结果后的精简独立确认见 [下一步方案](reports/iemoeo_s3_factorial_next_step.md)。
+该方案固定 SBX 候选及匹配消融，使用新 seeds61–90、相同 200N 预算，共 9 组、4860 项；
+不会改动旧 screen/factorial 的冻结记录，也不会自动开始长批次。

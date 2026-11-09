@@ -1,0 +1,287 @@
+{
+  "name": "iemoeo_s3_confirmation_v1",
+  "description": "Independent same-budget confirmation after the full development factorial; candidate uses SBX, not certified extrema.",
+  "common_arguments": [
+    "--iemoeo-architecture",
+    "s3_attribution",
+    "--origin-ratio",
+    "1",
+    "--no-parent-check",
+    "--iemoeo-selection-audit"
+  ],
+  "variants": {
+    "f11011": {
+      "label": "I=1, P=1, C=0, M=1, E=1",
+      "arguments": [
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f01011": {
+      "label": "I=0, P=1, C=0, M=1, E=1",
+      "arguments": [
+        "--no-isolation",
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 0,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f10011": {
+      "label": "I=1, P=0, C=0, M=1, E=1",
+      "arguments": [
+        "--representative-selection",
+        "local_random",
+        "--combination-method",
+        "sbx_only"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 0,
+        "C": 0,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f11001": {
+      "label": "I=1, P=1, C=0, M=0, E=1",
+      "arguments": [
+        "--combination-method",
+        "sbx_only",
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "f11010": {
+      "label": "I=1, P=1, C=0, M=1, E=0",
+      "arguments": [
+        "--combination-method",
+        "sbx_only",
+        "--no-direction-elite-protection"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 0,
+        "M": 1,
+        "E": 0
+      }
+    },
+    "full": {
+      "label": "I=1, P=1, C=1, M=1, E=1",
+      "arguments": [],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 1,
+        "M": 1,
+        "E": 1
+      }
+    },
+    "f11101": {
+      "label": "I=1, P=1, C=1, M=0, E=1",
+      "arguments": [
+        "--no-persistent-direction-memory"
+      ],
+      "factors": {
+        "I": 1,
+        "P": 1,
+        "C": 1,
+        "M": 0,
+        "E": 1
+      }
+    },
+    "no_combination": {
+      "label": "Combination allowance redirected to local search",
+      "arguments": [
+        "--combination-method",
+        "none"
+      ]
+    },
+    "s3_elite_reference": {
+      "label": "Unchanged historical S3-Elite (performance reference only)",
+      "algorithm": "IEMOEC",
+      "arguments": [
+        "--iemoec-variant",
+        "s3_elite",
+        "--origin-ratio",
+        "0.2"
+      ]
+    }
+  },
+  "suites": {
+    "confirm_core": [
+      "f11011",
+      "f01011",
+      "f10011",
+      "f11001",
+      "f11010",
+      "full",
+      "f11101",
+      "no_combination",
+      "s3_elite_reference"
+    ]
+  },
+  "contrasts": [
+    {
+      "id": "candidate_isolation",
+      "target": "f11011",
+      "control": "f01011",
+      "claim": "Local mating isolation with direction-best representatives and SBX"
+    },
+    {
+      "id": "candidate_representatives",
+      "target": "f11011",
+      "control": "f10011",
+      "claim": "Direction-best versus random representatives with isolation and SBX"
+    },
+    {
+      "id": "candidate_memory",
+      "target": "f11011",
+      "control": "f11001",
+      "claim": "Persistent memory at fixed isolation, best representatives, SBX and elite protection"
+    },
+    {
+      "id": "candidate_elites",
+      "target": "f11011",
+      "control": "f11010",
+      "claim": "Elite protection with isolation, best representatives, SBX and memory"
+    },
+    {
+      "id": "blocks_with_memory",
+      "target": "full",
+      "control": "f11011",
+      "claim": "Whole blocks versus SBX when memory is enabled"
+    },
+    {
+      "id": "blocks_without_memory",
+      "target": "f11101",
+      "control": "f11001",
+      "claim": "Whole blocks versus SBX when memory is disabled"
+    },
+    {
+      "id": "candidate_combination",
+      "target": "f11011",
+      "control": "no_combination",
+      "claim": "Cross-direction SBX allocation versus continued local search at equal total FE"
+    },
+    {
+      "id": "candidate_vs_s3",
+      "target": "f11011",
+      "control": "s3_elite_reference",
+      "claim": "Independent performance comparison; multi-change, not single-factor attribution"
+    }
+  ],
+  "interactions": [
+    {
+      "id": "blocks_x_memory",
+      "cells": [
+        "full",
+        "f11011",
+        "f11101",
+        "f11001"
+      ]
+    }
+  ],
+  "effect_families": [],
+  "stages": {
+    "smoke": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3",
+      "seeds": "1",
+      "evals_per_pop": 20,
+      "timing_only": false
+    },
+    "pilot": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg1",
+        "wfg4",
+        "wfg9"
+      ],
+      "objectives": "3,5,8",
+      "seeds": "1-5",
+      "evals_per_pop": 200,
+      "timing_only": false
+    },
+    "confirm": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg1",
+        "wfg4",
+        "wfg9"
+      ],
+      "objectives": "3,5,8",
+      "seeds": "61-90",
+      "evals_per_pop": 200,
+      "timing_only": false
+    },
+    "many_objective": {
+      "problems": [
+        "dtlz2",
+        "dtlz3",
+        "dtlz7",
+        "wfg1",
+        "wfg4",
+        "wfg9"
+      ],
+      "objectives": "3,5,8",
+      "seeds": "61-90",
+      "evals_per_pop": 400,
+      "timing_only": false
+    },
+    "timing": {
+      "problems": [
+        "dtlz2",
+        "wfg9"
+      ],
+      "objectives": "3,5",
+      "seeds": "61-65",
+      "evals_per_pop": 200,
+      "timing_only": true
+    }
+  },
+  "interpretation": {
+    "I": "Closed mating during synchronized local phase; memory/global exchange only between phases, not eternally isolated ancestry.",
+    "P": "Best versus random representative under a fixed direction/normalization, not mathematical extremum.",
+    "C": "Explicit whole-block inheritance versus SBX with equal requested new-evaluation quota.",
+    "M": "Persistent direction memory versus rebuilding identical-capacity pools from current N each batch.",
+    "E": "Direction elite reservation versus same NSGA3 selection without reservation.",
+    "K": "I/P/C all on versus all off; this package effect is not any individual factor.",
+    "Q": "Coordinate-neighborhood finite test only; untested/failed parents forbidden in checked arm, no unqualified fallback; missing combination allowance goes to local search."
+  },
+  "confirmation_policy": {
+    "primary_candidate": "f11011",
+    "development_data": "All 37 pilot arms, seeds1-5, were inspected before selecting this candidate. Their best observed rank is not unbiased confirmation.",
+    "seeds": "61-90; must remain uninspected until the complete registered batch is finished.",
+    "budget": "200N, matching the development comparison. This new registration supersedes the old 400N proposal only for this new confirmation suite.",
+    "decision": "Freeze the candidate and all 18 scenes. Report all contrasts and negative scenes. Do not choose a different candidate from confirmation results.",
+    "scope": "Local isolation, direction-best selection and generic cross-direction recombination. No claim that whole-block inheritance or certified extrema are necessary.",
+    "statistics": "Holm across all 8 contrasts x18 scenes x2 metrics (288 tests). Registered blocks-memory interactions form a separate 18-test family."
+  }
+}

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import io
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+from contextlib import redirect_stdout
 
 import numpy as np
 
@@ -14,7 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 
 from analyze_iemoeo_pilot import descriptive_comparisons
-from run_iemoeo_mechanisms import DEFAULT_PLAN, build_commands, incomplete_commands, write_schedule
+from run_iemoeo_mechanisms import (
+    DEFAULT_PLAN, build_commands, incomplete_commands, main as mechanism_main,
+    write_group_manifests, write_schedule,
+)
+from iemoec_experiment.manifest import load_manifest
 from summarize_iemoeo_mechanisms import (
     apply_global_holm, contrast_overview, evidence_scope, interaction_overview,
     interaction_rows, paired_log_ratio,
@@ -169,6 +175,36 @@ class MechanismV3PlanTests(unittest.TestCase):
             with patch("summarize_iemoeo_mechanisms.load_rows", return_value=([], validation)):
                 with self.assertRaisesRegex(ValueError, "清单任务数量与登记不符"):
                     summarize_study(root)
+
+    def test_cached_retry_registers_all_groups_without_launching_workers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            arguments = ["run_iemoeo_mechanisms.py", "--stage", "smoke", "--suite", "core",
+                         "--output-root", str(root / "study"), "--result-store", str(root / "store"),
+                         "--retry-incomplete", "--execute"]
+            with patch.object(sys, "argv", arguments), redirect_stdout(io.StringIO()):
+                with patch("run_iemoeo_mechanisms.stored_result_complete", return_value=True):
+                    with patch("run_iemoeo_mechanisms.subprocess.run", side_effect=AssertionError("启动了计算")):
+                        self.assertEqual(mechanism_main(), 0)
+            for name in self.plan["suites"]["core"]:
+                manifest = load_manifest(root / "study" / "smoke" / "core" / name)
+                self.assertEqual(manifest["expected_task_count"], 2)
+                self.assertTrue(all("result_path" in task for task in manifest["tasks"]))
+            self.assertFalse((root / "store").exists())
+
+    def test_group_registration_does_not_overwrite_incompatible_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commands = build_commands(self.plan, "smoke", "core", root / "study", root / "store", 1)
+            write_group_manifests(commands)
+            path = root / "study" / "smoke" / "core" / "full" / "experiment_manifest.json"
+            original = path.read_bytes()
+            changed = copy.deepcopy(self.plan)
+            changed["stages"]["smoke"]["seeds"] = "2"
+            changed_commands = build_commands(changed, "smoke", "core", root / "study", root / "store", 1)
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                write_group_manifests(changed_commands)
+            self.assertEqual(path.read_bytes(), original)
 
 
 class MechanismStatisticsTests(unittest.TestCase):

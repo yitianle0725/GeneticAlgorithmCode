@@ -109,6 +109,11 @@ python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_s3_attribution_v1/p
 python scripts/run_s3_attribution.py --stage pilot --retry-incomplete --workers 4 --execute
 ```
 
+从 screen 扩展 factorial 时，已命中共享结果的组也必须在新套件中登记 `experiment_manifest.json`。
+调度器现在先写全部组清单，再过滤需要计算的组；即使日志为 `0/37`，也可以正常汇总。
+若旧版已完成计算却提示缺少清单，更新后重新执行同一 factorial 续跑命令即可补齐引用，
+不需要复制结果目录或使用 `--force`，不会重算已完成 seed。
+
 先完成分析，再决定是否扩展；本次仅运行功能冒烟，不自动启动长 pilot。
 5 seeds 不能承担多项两侧精确检验的显著性确认。固定后确认使用独立 seeds61–90、400N，
 仍为 M3/5/8，不运行 MOEAD、M10/M15。确认套件要与最终保留的主张匹配，不能只挑 pilot 的有利函数。

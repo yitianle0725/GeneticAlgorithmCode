@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from run import build_parser, resolve_cases
 from iemoec_experiment.result_store import implementation_signature, stored_result_complete, case_implementation_signature
+from iemoec_experiment.manifest import build_manifest, write_manifest
+from iemoec_experiment.metrics import metric_schema_version_for_problem
 
 DEFAULT_PLAN = ROOT / "experiments" / "iemoeo_mechanisms_v3.json"
 
@@ -88,6 +90,16 @@ def incomplete_commands(commands: list[dict]) -> list[dict]:
     return pending
 
 
+def write_group_manifests(commands: list[dict]) -> None:
+    """所有组都登记共享结果引用；已复用组也需要清单才能汇总。"""
+    for command in commands:
+        cases = resolve_cases(build_parser().parse_args(command["arguments"]))
+        if len(cases) != command["tasks"]:
+            raise ValueError(f"{command['variant']} 的任务数量与登记不符")
+        manifest = build_manifest(cases, metric_schema_version_for_problem(cases[0].normalized_problem))
+        write_manifest(Path(cases[0].output_root) / "experiment_manifest.json", manifest)
+
+
 def main(default_plan: Path = DEFAULT_PLAN, default_suite: str = "core") -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=default_plan)
@@ -110,7 +122,9 @@ def main(default_plan: Path = DEFAULT_PLAN, default_suite: str = "core") -> int:
         commands = build_commands(plan, args.stage, args.suite, args.output_root, args.result_store, workers)
         schedule = args.output_root / args.stage / args.suite / "schedule.json"
         write_schedule(schedule, plan, args.stage, args.suite, commands)
-    except ValueError as exc:
+        # 必须先写全部组清单，再筛执行组；过滤后再写会遗漏跨套件复用的组。
+        write_group_manifests(commands)
+    except (ValueError, RuntimeError) as exc:
         parser.error(str(exc))
     print(f"阶段={args.stage} 套件={args.suite} 任务={sum(c['tasks'] for c in commands)} "
           f"FE={sum(c['total_fes'] for c in commands)} workers={workers}", flush=True)

@@ -162,6 +162,24 @@ class AttributionPlanTests(unittest.TestCase):
         self.assertEqual(lookup["K"]["median_log_effect"], 0.)
         self.assertEqual(lookup["E"]["p_value"], 1.)
 
+    def test_confirmation_candidate_and_matched_controls_are_frozen(self):
+        plan = json.loads((ROOT / "experiments/iemoeo_s3_confirmation_v1.json").read_text(encoding="utf-8"))
+        commands = build_commands(plan, "confirm", "confirm_core", Path("study"), Path("store"), 4)
+        self.assertEqual(sum(c["tasks"] for c in commands), 4860)
+        self.assertEqual(sum(c["total_fes"] for c in commands), 136_404_000)
+        configs = {c["variant"]: c["iemoeo_config"] for c in commands if "iemoeo_config" in c}
+        self.assertEqual(configs["f11011"]["combination_method"], "sbx_only")
+        for contrast in plan["contrasts"]:
+            if contrast["id"] == "candidate_vs_s3":
+                continue
+            a, b = configs[contrast["target"]], configs[contrast["control"]]
+            self.assertEqual(sum(a[k] != b[k] for k in a), 1, contrast["id"])
+        for command in commands:
+            args = command["arguments"]
+            self.assertEqual(args[args.index("--seeds") + 1], "61-90")
+            self.assertEqual(args[args.index("--evals-per-pop") + 1], "200")
+            self.assertEqual(args[args.index("--objectives") + 1], "3,5,8")
+
 
 if __name__ == "__main__":
     unittest.main()
