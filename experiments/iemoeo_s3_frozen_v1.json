@@ -1,0 +1,97 @@
+{
+  "profile_schema_version": 1,
+  "release_id": "iemoeo_s3_confirmed_v1",
+  "frozen_on": "2026-11-09",
+  "status": "independently_tested_research_baseline_not_universal_optimum",
+  "algorithm": "IEMOEO",
+  "algorithm_variant": "iemoeo_s3_attribution",
+  "algorithm_schema_version": 4,
+  "iemoeo": {
+    "origin_ratio": 1.0,
+    "island_population": 20,
+    "inner_generations_early": 1,
+    "inner_generations_late": 1,
+    "switch_ratio": 0.4,
+    "normalization_mode": "global",
+    "objective_weights": null,
+    "principle_probe_radius": 0.01,
+    "parent_pool_limit": 10,
+    "combination_pairs_limit": 25,
+    "block_size": 4,
+    "block_mode": "uniform",
+    "combination_method": "sbx_only",
+    "outer_survival": "nsga3",
+    "use_crowding": false,
+    "isolation": true,
+    "parent_check": false,
+    "block_combination": true,
+    "diversity_maintenance": true,
+    "elitist_pool": true,
+    "representative_selection": "local_best",
+    "selection_audit": true,
+    "parent_check_mode": "representative_dominance",
+    "architecture": "s3_attribution",
+    "persistent_direction_memory": true,
+    "direction_elite_protection": true,
+    "attribution_batch_ratio": 4.0,
+    "attribution_local_steps": 3,
+    "qualification_mode": "none",
+    "qualification_fe_ratio": 0.2
+  },
+  "configuration_sha256": "2c7bb6387991208f11d9ac55526997598b0fe5c15a20e85b2bd73cf6640a7add",
+  "implementation": {
+    "sources": {
+      "factory": "43ac803989b0547aeda855b42ddaef4e165091edde563a2b6510678e7757e040",
+      "problems": "82de759d9544fa2ee76f9a81fbae9acb02d52bf91571506810538118f9751184",
+      "initialization": "7ba69d097d5ea598359328eaae891a7389d233ea1f8d4c5f78e4c882e3d5fa66",
+      "normalization": "450d79f4e7acdf518da90c4dfb8990e2edef7d4d7aefda7af4c5a57945c64a15",
+      "constraints": "a8b8aaafd8d2ceb67ea590a08d2815d0997e7ad599912f8906b37a8953b5b1b2",
+      "metrics": "959d18cf7743ad1d27814b8f463eb71bda244a7c84aad829d916407ff6f751a3",
+      "runner": "f2679d3efba1f47cdc55c394eafb3b579578a328947b8ca4af27f4c46e1e44d2",
+      "iemoeo": "f5243e141e94c494dced92712115b96ccfe9b2ee0f459e48fd298f8cea37fbc5",
+      "iemoeo_diagnostics": "59f8d9904a530267325f367545f620c92d63906f2c6d8c5c1501c93f8c035eea",
+      "iemoeo_founder": "bba85ee80827289a8fab4948794d1f213a29e3fec07b9e24306224c234ea4f71",
+      "iemoeo_attribution": "0508b99ac6e791038f2b83539491d088009fddb313af9e06f6e8f124274b0ce2",
+      "iemoec": "a6448900fd3c5cf61128f7be011383671ded09454a08ad0e253bd25738baf360",
+      "directions": "c91f8c4dc7ce0e7d3861ea2c437fbf59351d2133430f784d7602573805c41bc0",
+      "directional_memory": "dedf36a6d0cddf6017d9de05fad7be74c406536ed0f3dc276a0ac703aeda16ad",
+      "source_budget": "48bdc0a85155bca9b9b41ea682039694741d4fd4073a5ee9240f912e145b78c8"
+    },
+    "versions": {
+      "python": "3.12",
+      "numpy": "2.5.2",
+      "scipy": "1.18.1",
+      "pymoo": "0.6.2",
+      "numba": "0.67.0"
+    }
+  },
+  "evidence": {
+    "study": "results/iemoeo_s3_confirmation_v1/confirm/confirm_core",
+    "registration_sha256": "abf6dc662471f25a3267654eef720355ce13b585bbe7a3a7107c82b685338379",
+    "preselected_candidate": "f11011",
+    "runs": 4860,
+    "candidate_runs": 540,
+    "problems": [
+      "dtlz2",
+      "dtlz3",
+      "dtlz7",
+      "wfg1",
+      "wfg4",
+      "wfg9"
+    ],
+    "objectives": [
+      3,
+      5,
+      8
+    ],
+    "seeds": "61-90",
+    "evals_per_pop": 200,
+    "holm_primary_tests": 288,
+    "holm_interaction_tests": 18
+  },
+  "interpretation": {
+    "supported": "Cross-direction SBX allocation and direction-best representatives; isolation improves IGD+ with HV exceptions.",
+    "conditional": "Memory has both significant benefits and harms; elite reservation has limited evidence. Retain preselected values rather than selecting anew on confirmation data.",
+    "excluded": "Whole-block inheritance and finite qualification are not required in this release; no mathematical extremum, universal dominance, parallel-efficiency or complexity claim."
+  }
+}

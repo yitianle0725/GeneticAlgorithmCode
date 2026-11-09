@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import multiprocessing
 import os
@@ -29,7 +30,9 @@ from iemoec_experiment.metrics import (  # noqa: E402
 )
 from iemoec_experiment.problems import make_problem  # noqa: E402
 from iemoec_experiment.runner import run_case  # noqa: E402
-from iemoec_experiment.result_store import legacy_result_candidates, stored_result_complete  # noqa: E402
+from iemoec_experiment.result_store import (  # noqa: E402
+    legacy_result_candidates, stored_result_complete, implementation_signature,
+)
 from iemoec_experiment.manifest import result_files, task_key  # noqa: E402
 
 
@@ -327,7 +330,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attribution-local-steps", type=int, default=3)
     parser.add_argument("--qualification-mode", choices=["none", "probe_checked", "probe_unchecked"], default="none")
     parser.add_argument("--qualification-fe-ratio", type=float, default=.2)
+    parser.add_argument("--iemoeo-frozen", type=Path, help="使用冻结的 IE-MOEO 完整配置和实现摘要，不与机制参数混用")
     return parser
+
+
+def load_frozen_iemoeo(path: Path) -> IEMOEOConfig:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or record.get("profile_schema_version") != 1 or record.get("algorithm") != "IEMOEO":
+            raise ValueError("不是支持的 IE-MOEO 冻结文件")
+        config = record["iemoeo"]
+        encoded = json.dumps(config, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        if hashlib.sha256(encoded).hexdigest() != record["configuration_sha256"]:
+            raise ValueError("冻结参数摘要不匹配；请新建版本，不要修改原冻结文件")
+        options = IEMOEOConfig(**config)
+        if implementation_signature("IEMOEO", options.architecture) != record["implementation"]:
+            raise ValueError("当前实现或依赖与冻结版本不符；请恢复对应版本或登记新版本")
+        return options
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"无法使用冻结配置 {path}: {exc}") from exc
 
 
 def resolve_cases(args) -> list[ExperimentCase]:
@@ -476,6 +497,12 @@ def resolve_cases(args) -> list[ExperimentCase]:
         qualification_mode=args.qualification_mode,
         qualification_fe_ratio=args.qualification_fe_ratio,
     )
+    if args.iemoeo_frozen is not None:
+        if "IEMOEO" not in algorithms:
+            raise ValueError("--iemoeo-frozen 要求算法列表包含 IEMOEO")
+        if iemoeo != IEMOEOConfig():
+            raise ValueError("冻结配置不能与 IE-MOEO 机制参数混用；请只设置问题、预算、种子等实验参数")
+        iemoeo = load_frozen_iemoeo(args.iemoeo_frozen)
     cases = []
     for problem, n_obj in scenarios:
         make_problem(problem, n_obj)
@@ -559,6 +586,8 @@ def main() -> int:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2
     print(f"实验任务: {len(cases)} | workers={args.workers}")
+    if args.iemoeo_frozen is not None:
+        print(f"IE-MOEO 冻结配置：{args.iemoeo_frozen} | 原默认算法未改变")
     print(f"算法结果库: {cases[0].result_store} | 相同配置自动复用，--force 强制重跑")
     for case in cases[:8]:
         print(

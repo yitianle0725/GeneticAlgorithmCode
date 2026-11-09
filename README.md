@@ -665,3 +665,8 @@ python scripts/summarize_iemoeo_mechanisms.py results/iemoeo_s3_attribution_v1/p
 完整五因素开发结果后的精简独立确认见 [下一步方案](reports/iemoeo_s3_factorial_next_step.md)。
 该方案固定 SBX 候选及匹配消融，使用新 seeds61–90、相同 200N 预算，共 9 组、4860 项；
 不会改动旧 screen/factorial 的冻结记录，也不会自动开始长批次。
+
+独立确认完成后的固定研究基线为 `experiments/iemoeo_s3_frozen_v1.json`，结论与反例见
+[独立确认评估](reports/iemoeo_s3_confirmation_assessment.md)。使用
+`--iemoeo-frozen experiments/iemoeo_s3_frozen_v1.json` 才会运行该固定版本；原默认保持不变。
+冻结入口检查参数与实现摘要，不能同时附加机制参数；它不改变同批次 S3-Elite 的配置。

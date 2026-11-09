@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import copy
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,7 @@ from iemoec_experiment.iemoeo import IEMOEORunner
 from iemoec_experiment.normalization import ObjectiveNormalization
 from iemoec_experiment.runner import run_case
 from run_iemoeo_mechanisms import build_commands
+from run import build_parser, resolve_cases, load_frozen_iemoeo
 from summarize_iemoeo_mechanisms import factorial_effect_rows
 
 
@@ -179,6 +181,44 @@ class AttributionPlanTests(unittest.TestCase):
             self.assertEqual(args[args.index("--seeds") + 1], "61-90")
             self.assertEqual(args[args.index("--evals-per-pop") + 1], "200")
             self.assertEqual(args[args.index("--objectives") + 1], "3,5,8")
+
+    def test_frozen_profile_reproduces_candidate_without_changing_s3(self):
+        profile = ROOT / "experiments/iemoeo_s3_frozen_v1.json"
+        args = build_parser().parse_args(["--preset", "custom", "--algorithms", "IEMOEC", "IEMOEO",
+            "--iemoec-variant", "s3_elite", "--iemoeo-frozen", str(profile), "--problems", "dtlz2",
+            "--objectives", "3", "--seeds", "61", "--evals-per-pop", "200"])
+        s3, candidate = resolve_cases(args)
+        self.assertEqual(s3.iemoec.origin_ratio, .2)
+        self.assertEqual(candidate.iemoeo.origin_ratio, 1.)
+        self.assertEqual(candidate.iemoeo.combination_method, "sbx_only")
+        self.assertTrue(candidate.iemoeo.persistent_direction_memory)
+        self.assertFalse(candidate.iemoeo.parent_check)
+        self.assertEqual(candidate.iemoeo.qualification_mode, "none")
+        plan = json.loads((ROOT / "experiments/iemoeo_s3_confirmation_v1.json").read_text(encoding="utf-8"))
+        commands = build_commands(plan, "confirm", "confirm_core", Path("study"), Path("store"), 4)
+        original = resolve_cases(build_parser().parse_args(commands[0]["arguments"]))[0]
+        self.assertEqual(candidate.iemoeo, original.iemoeo)
+
+    def test_frozen_profile_refuses_changed_parameters_and_implementation(self):
+        original = json.loads((ROOT / "experiments/iemoeo_s3_frozen_v1.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "profile.json"
+            changed = copy.deepcopy(original)
+            changed["iemoeo"]["origin_ratio"] = .3
+            path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "冻结参数摘要不匹配"):
+                load_frozen_iemoeo(path)
+            changed = copy.deepcopy(original)
+            changed["implementation"]["sources"]["iemoeo_attribution"] = "changed"
+            path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "当前实现或依赖与冻结版本不符"):
+                load_frozen_iemoeo(path)
+
+    def test_frozen_profile_cannot_be_mixed_with_mechanism_overrides(self):
+        args = build_parser().parse_args(["--preset", "smoke", "--algorithms", "IEMOEO",
+            "--iemoeo-frozen", str(ROOT / "experiments/iemoeo_s3_frozen_v1.json"), "--no-isolation"])
+        with self.assertRaisesRegex(ValueError, "冻结配置不能与"):
+            resolve_cases(args)
 
 
 if __name__ == "__main__":
